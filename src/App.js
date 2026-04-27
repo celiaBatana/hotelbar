@@ -20,7 +20,7 @@ const INITIAL_PRODUCTS = [
 const COLOR_PALETTE = ["#38bdf8","#fbbf24","#a78bfa","#fb923c","#f472b6","#34d399","#f87171","#60a5fa","#e879f9","#a3e635","#2dd4bf","#facc15"];
 const ICON_LIST     = ["🥤","🍺","🥃","☕","🍷","🧃","🍾","🍹","🧋","🍫","🫖","🍵","🥛","🧊","🫗"];
 
-const fmtEur = (n) => Number(n).toLocaleString("fr-FR",{minimumFractionDigits:2,maximumFractionDigits:2}) + " €";
+const fmtEur = (n) => Number(n).toLocaleString("fr-FR",{minimumFractionDigits:2,maximumFractionDigits:2}) + " FCFA";
 const today  = () => new Date().toDateString();
 const uid    = () => Math.random().toString(36).slice(2,6);
 
@@ -497,7 +497,7 @@ export default function App() {
           <div className="card m-in" style={{padding:32,width:440,maxWidth:"100%"}} onClick={e=>e.stopPropagation()}>
             <h2 style={{fontWeight:800,fontSize:20,marginBottom:24}}>Nouvel article</h2>
             <div style={{display:"grid",gap:14}}>
-              {[["Nom","text","name","Ex: Perrier…"],["Prix (€)","number","price","3.50"],["Stock initial","number","stock","24"],["Seuil alerte","number","minStock","6"],["Unité","text","unit","bouteille…"]].map(([l,t,k,ph])=>(
+              {[["Nom","text","name","Ex: Perrier…"],["Prix (FCFA)","number","price","3.50"],["Stock initial","number","stock","24"],["Seuil alerte","number","minStock","6"],["Unité","text","unit","bouteille…"]].map(([l,t,k,ph])=>(
                 <div key={k}>
                   <label style={{fontSize:11,color:"#475569",display:"block",marginBottom:6,fontWeight:700,letterSpacing:.8}}>{l.toUpperCase()}</label>
                   <input className="input" type={t} placeholder={ph} value={newP[k]} onChange={e=>setNewP(x=>({...x,[k]:e.target.value}))}/>
@@ -524,7 +524,7 @@ export default function App() {
           <div className="card m-in" style={{padding:32,width:440,maxWidth:"100%"}} onClick={e=>e.stopPropagation()}>
             <h2 style={{fontWeight:800,fontSize:20,marginBottom:24}}>Modifier l'article</h2>
             <div style={{display:"grid",gap:14}}>
-              {[["Nom","text","name"],["Prix (€)","number","price"],["Stock actuel","number","stock"],["Seuil alerte","number","minStock"],["Unité","text","unit"]].map(([l,t,k])=>(
+              {[["Nom","text","name"],["Prix (FCFA)","number","price"],["Stock actuel","number","stock"],["Seuil alerte","number","minStock"],["Unité","text","unit"]].map(([l,t,k])=>(
                 <div key={k}>
                   <label style={{fontSize:11,color:"#475569",display:"block",marginBottom:6,fontWeight:700,letterSpacing:.8}}>{l.toUpperCase()}</label>
                   <input className="input" type={t} value={editModal[k]} onChange={e=>setEditModal(x=>({...x,[k]:e.target.value}))}/>
