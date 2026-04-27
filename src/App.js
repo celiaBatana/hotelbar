@@ -342,7 +342,7 @@ export default function App() {
                 {filtered.map(p => {
                   const cat=getCat(p.categoryId); const isLow=p.stock<=p.minStock; const pp=pct(p);
                   return (
-                    <div key={p.id} className="prod-card" style={{borderColor:isLow?"rgba(251,146,60,.35)":"#1e1e35"}}>
+                    <div key={p.id} className="prod-card" style={{borderColor:isLow?"rgba(239,68,68,.8)":"#1e1e35", borderShadow:isLow?"0 0 20px rgba(239,68,68,.3)":""}}>
                       {isLow && <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:"linear-gradient(90deg,#fb923c,#f59e0b)"}}/>}
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
                         <div style={{display:"flex",alignItems:"center",gap:10}}>
