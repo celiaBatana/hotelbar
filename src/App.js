@@ -31,8 +31,11 @@ export default function App() {
   const [loaded,     setLoaded]     = useState(false);
 
   const [view,        setView]       = useState("dashboard");
+  const [stockView,   setStockView]  = useState("cards"); // "cards" | "tableau"
   const [filterCat,   setFilterCat]  = useState("all");
   const [search,      setSearch]     = useState("");
+  const [tableEdits,  setTableEdits] = useState({}); // {productId: {sell, restock}}
+  const [tableSaving, setTableSaving]= useState(false);
 
   const [sellModal,     setSellModal]    = useState(null);
   const [sellQty,       setSellQty]      = useState(1);
@@ -209,7 +212,7 @@ export default function App() {
             </div>
           </div>
 
-          {[["dashboard","📊","Dashboard"],["stock","📦","Stocks"],["ventes","💳","Ventes"],["top","🏆","Classement"]].map(([v,ic,lb]) => (
+          {[["dashboard","📊","Dashboard"],["stock","📦","Stocks"],["tableau","📋","Tableau"],["ventes","💳","Ventes"],["top","🏆","Classement"]].map(([v,ic,lb]) => (
             <button key={v} className={`sb-btn${view===v?" active":""}`} onClick={()=>setView(v)}>
               <span style={{fontSize:16}}>{ic}</span>{lb}
               {v==="stock" && lowStock.length > 0 && <span style={{marginLeft:"auto",background:"#f59e0b",color:"#000",borderRadius:20,padding:"1px 8px",fontSize:11,fontWeight:800}}>{lowStock.length}</span>}
@@ -342,7 +345,7 @@ export default function App() {
                 {filtered.map(p => {
                   const cat=getCat(p.categoryId); const isLow=p.stock<=p.minStock; const pp=pct(p);
                   return (
-                    <div key={p.id} className="prod-card" style={{borderColor:isLow?"rgba(239,68,68,.8)":"#1e1e35", borderShadow:isLow?"0 0 20px rgba(239,68,68,.3)":""}}>
+                    <div key={p.id} className="prod-card" style={{borderColor:isLow?"rgba(251,146,60,.35)":"#1e1e35"}}>
                       {isLow && <div style={{position:"absolute",top:0,left:0,right:0,height:3,background:"linear-gradient(90deg,#fb923c,#f59e0b)"}}/>}
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
                         <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -378,6 +381,134 @@ export default function App() {
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          )}
+
+          {/* ══ TABLEAU ══ */}
+          {view==="tableau" && (
+            <div className="fade-up">
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:26}}>
+                <div>
+                  <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Tableau de gestion</h1>
+                  <p style={{color:"#475569",fontSize:14}}>Saisie rapide — ventes et réappros en une fois</p>
+                </div>
+                <button className="btn" style={{background:"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"#fff",padding:"11px 24px",fontSize:14,boxShadow:"0 4px 20px rgba(99,102,241,.3)",opacity:tableSaving?.5:1}}
+                  onClick={async()=>{
+                    setTableSaving(true);
+                    const latest = await dbGet("products") || products;
+                    const latestSales = await dbGet("sales") || sales;
+                    const newSales = [];
+                    const updatedProds = latest.map(p => {
+                      const edits = tableEdits[p.id] || {};
+                      const sellQ = parseInt(edits.sell)||0;
+                      const restQ = parseInt(edits.restock)||0;
+                      if (sellQ>0) newSales.push({id:Date.now()+p.id, productId:p.id, productName:p.name, qty:sellQ, amount:p.price*sellQ, date:new Date().toISOString(), by:myId.current});
+                      return {...p, stock: p.stock - sellQ + restQ, sold: p.sold + sellQ};
+                    });
+                    await Promise.all([saveP(updatedProds), saveS([...latestSales,...newSales])]);
+                    setTableEdits({});
+                    setTableSaving(false);
+                    toast$(`✓ Tout enregistré !`);
+                  }}>
+                  {tableSaving ? "Enregistrement…" : "✓ Tout valider"}
+                </button>
+              </div>
+
+              <div className="card" style={{overflow:"hidden"}}>
+                <table style={{width:"100%",borderCollapse:"collapse"}}>
+                  <thead>
+                    <tr style={{borderBottom:"2px solid #1e1e35",background:"#0f0f1a"}}>
+                      {["Article","Catégorie","Prix","Stock","Min","Vendre","Réappro","Nouveau stock"].map(h=>(
+                        <th key={h} style={{padding:"14px 16px",textAlign:"left",fontSize:11,color:"#475569",fontWeight:700,letterSpacing:.8,whiteSpace:"nowrap"}}>{h.toUpperCase()}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {products.map((p,i)=>{
+                      const cat = getCat(p.categoryId);
+                      const isLow = p.stock <= p.minStock;
+                      const edits = tableEdits[p.id] || {};
+                      const sellQ = parseInt(edits.sell)||0;
+                      const restQ = parseInt(edits.restock)||0;
+                      const newStock = p.stock - sellQ + restQ;
+                      const newIsLow = newStock <= p.minStock;
+                      return (
+                        <tr key={p.id} style={{borderBottom:"1px solid #1e1e3530", background: isLow?"rgba(239,68,68,.04)":i%2?"rgba(255,255,255,.01)":"transparent", transition:"background .2s"}}>
+                          {/* Article */}
+                          <td style={{padding:"12px 16px"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:8}}>
+                              <div style={{width:32,height:32,borderRadius:8,background:`${cat.color}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{cat.icon}</div>
+                              <span style={{fontWeight:600,fontSize:14}}>{p.name}</span>
+                              {isLow && <span style={{fontSize:10,background:"rgba(239,68,68,.15)",color:"#ef4444",borderRadius:4,padding:"2px 6px",fontWeight:700}}>ALERTE</span>}
+                            </div>
+                          </td>
+                          {/* Catégorie */}
+                          <td style={{padding:"12px 16px"}}>
+                            <span className="pill" style={{background:`${cat.color}18`,color:cat.color}}>{cat.name}</span>
+                          </td>
+                          {/* Prix */}
+                          <td style={{padding:"12px 16px",fontWeight:600,color:"#818cf8",whiteSpace:"nowrap"}}>{fmtEur(p.price)}</td>
+                          {/* Stock actuel */}
+                          <td style={{padding:"12px 16px"}}>
+                            <span style={{fontWeight:800,fontSize:18,color:isLow?"#ef4444":"#e2e8f0"}}>{p.stock}</span>
+                            <span style={{fontSize:11,color:"#475569",marginLeft:4}}>{p.unit}s</span>
+                          </td>
+                          {/* Min */}
+                          <td style={{padding:"12px 16px",fontSize:13,color:"#475569"}}>{p.minStock}</td>
+                          {/* Vendre */}
+                          <td style={{padding:"8px 16px"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <button className="btn" style={{width:28,height:28,background:"#1e1e35",color:"#e2e8f0",fontSize:16,border:"1px solid #2d2d45",borderRadius:6,padding:0,flexShrink:0}}
+                                onClick={()=>setTableEdits(e=>({...e,[p.id]:{...e[p.id],sell:Math.max(0,(parseInt(e[p.id]?.sell)||0)-1)}}))}>−</button>
+                              <input type="number" min="0" max={p.stock} value={edits.sell||""} placeholder="0"
+                                onChange={ev=>setTableEdits(e=>({...e,[p.id]:{...e[p.id],sell:ev.target.value}}))}
+                                style={{width:56,background:"#1a1a2e",border:`1.5px solid ${sellQ>0?"#818cf8":"#2d2d45"}`,borderRadius:8,color:sellQ>0?"#818cf8":"#e2e8f0",fontFamily:"inherit",padding:"6px 8px",textAlign:"center",fontSize:14,fontWeight:sellQ>0?700:400,outline:"none"}}/>
+                              <button className="btn" style={{width:28,height:28,background:"#1e1e35",color:"#e2e8f0",fontSize:16,border:"1px solid #2d2d45",borderRadius:6,padding:0,flexShrink:0}}
+                                onClick={()=>setTableEdits(e=>({...e,[p.id]:{...e[p.id],sell:Math.min(p.stock,(parseInt(e[p.id]?.sell)||0)+1)}}))}>+</button>
+                              {sellQ>0 && <span style={{fontSize:11,color:"#818cf8",fontWeight:700,whiteSpace:"nowrap"}}>−{fmtEur(p.price*sellQ)}</span>}
+                            </div>
+                          </td>
+                          {/* Réappro */}
+                          <td style={{padding:"8px 16px"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <button className="btn" style={{width:28,height:28,background:"#1e1e35",color:"#e2e8f0",fontSize:16,border:"1px solid #2d2d45",borderRadius:6,padding:0,flexShrink:0}}
+                                onClick={()=>setTableEdits(e=>({...e,[p.id]:{...e[p.id],restock:Math.max(0,(parseInt(e[p.id]?.restock)||0)-1)}}))}>−</button>
+                              <input type="number" min="0" value={edits.restock||""} placeholder="0"
+                                onChange={ev=>setTableEdits(e=>({...e,[p.id]:{...e[p.id],restock:ev.target.value}}))}
+                                style={{width:56,background:"#1a1a2e",border:`1.5px solid ${restQ>0?"#4ade80":"#2d2d45"}`,borderRadius:8,color:restQ>0?"#4ade80":"#e2e8f0",fontFamily:"inherit",padding:"6px 8px",textAlign:"center",fontSize:14,fontWeight:restQ>0?700:400,outline:"none"}}/>
+                              <button className="btn" style={{width:28,height:28,background:"#1e1e35",color:"#e2e8f0",fontSize:16,border:"1px solid #2d2d45",borderRadius:6,padding:0,flexShrink:0}}
+                                onClick={()=>setTableEdits(e=>({...e,[p.id]:{...e[p.id],restock:(parseInt(e[p.id]?.restock)||0)+1}}))}>+</button>
+                              {restQ>0 && <span style={{fontSize:11,color:"#4ade80",fontWeight:700,whiteSpace:"nowrap"}}>+{restQ}</span>}
+                            </div>
+                          </td>
+                          {/* Nouveau stock */}
+                          <td style={{padding:"12px 16px"}}>
+                            <span style={{fontWeight:800,fontSize:16,color:newIsLow?"#ef4444":sellQ>0||restQ>0?"#4ade80":"#334155"}}>{newStock}</span>
+                            {(sellQ>0||restQ>0) && <span style={{fontSize:11,color:"#475569",marginLeft:4}}>{p.unit}s</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+
+                {/* Footer récap */}
+                {Object.values(tableEdits).some(e=>(parseInt(e.sell)||0)>0||(parseInt(e.restock)||0)>0) && (
+                  <div style={{padding:"16px 20px",borderTop:"1px solid #1e1e35",background:"#0f0f1a",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                    <div style={{fontSize:13,color:"#475569"}}>
+                      <span style={{color:"#818cf8",fontWeight:700,marginRight:16}}>
+                        💳 {Object.values(tableEdits).reduce((s,e)=>s+(parseInt(e.sell)||0),0)} vendus
+                        · {fmtEur(products.reduce((s,p)=>s+(parseInt(tableEdits[p.id]?.sell)||0)*p.price,0))} CA
+                      </span>
+                      <span style={{color:"#4ade80",fontWeight:700}}>
+                        📦 {Object.values(tableEdits).reduce((s,e)=>s+(parseInt(e.restock)||0),0)} réappros
+                      </span>
+                    </div>
+                    <button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"7px 16px",fontSize:13}}
+                      onClick={()=>setTableEdits({})}>Tout réinitialiser</button>
+                  </div>
+                )}
               </div>
             </div>
           )}
