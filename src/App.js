@@ -26,10 +26,14 @@ export default function App() {
   const [products,   setProducts]   = useState(INITIAL_PRODUCTS);
   const [categories, setCategories] = useState(INITIAL_CATEGORIES);
   const [sales,      setSales]      = useState([]);
+  const [reappros,   setReappros]   = useState([]);
   const [loaded,     setLoaded]     = useState(false);
 
   const [view,        setView]       = useState("dashboard");
   const [dashMonth,   setDashMonth]  = useState(() => { const n=new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; });
+  const [histMonth,   setHistMonth]  = useState(() => { const n=new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; });
+  const [histTab,     setHistTab]    = useState("ventes"); // "ventes" | "reappros"
+  const [openDays,    setOpenDays]   = useState({});       // {date: true} pour accordéon
   const [filterCat,   setFilterCat]  = useState("all");
   const [search,      setSearch]     = useState("");
   const [tableEdits,  setTableEdits] = useState({});
@@ -53,15 +57,16 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
-      const [cp,cs,cc] = await Promise.all([dbGet("products"),dbGet("sales"),dbGet("categories")]);
-      if (cp) setProducts(cp); if (cs) setSales(cs); if (cc) setCategories(cc);
+      const [cp,cs,cc,cr] = await Promise.all([dbGet("products"),dbGet("sales"),dbGet("categories"),dbGet("reappros")]);
+      if (cp) setProducts(cp); if (cs) setSales(cs); if (cc) setCategories(cc); if (cr) setReappros(cr);
       setLoaded(true);
     };
     init();
     const u1=dbListen("products", v=>setProducts(v));
     const u2=dbListen("sales",    v=>setSales(v));
     const u3=dbListen("categories",v=>setCategories(v));
-    return ()=>{ u1(); u2(); u3(); };
+    const u4=dbListen("reappros", v=>setReappros(v));
+    return ()=>{ u1(); u2(); u3(); u4(); };
   }, []);
 
   const saveP = async (v) => { setProducts(v);   await dbSet("products",v); };
@@ -130,18 +135,21 @@ export default function App() {
     setTableSaving(true);
     const latest=await dbGet("products")||products;
     const latestSales=await dbGet("sales")||sales;
+    const latestReappros=await dbGet("reappros")||[];
     const newSales=[];
+    const newReappros=[];
     const updatedProds=latest.map(p=>{
       const edits=tableEdits[p.id]||{};
       const sellQ=parseInt(edits.sell)||0;
       const restQ=parseInt(edits.restock)||0;
       if (sellQ>p.stock) return p;
       if (sellQ>0) newSales.push({id:Date.now()+p.id,productId:p.id,productName:p.name,qty:sellQ,amount:p.price*sellQ,date:new Date().toISOString(),by:myId.current});
+      if (restQ>0) newReappros.push({id:Date.now()+p.id+1,productId:p.id,productName:p.name,qty:restQ,date:new Date().toISOString(),by:myId.current});
       return {...p,stock:p.stock-sellQ+restQ,sold:p.sold+sellQ};
     });
-    await Promise.all([saveP(updatedProds),saveS([...latestSales,...newSales])]);
+    await Promise.all([saveP(updatedProds),saveS([...latestSales,...newSales]),dbSet("reappros",[...latestReappros,...newReappros])]);
     setTableEdits({}); setTableSaving(false);
-    toast$(`✓ ${newSales.length} vente(s) et réappros enregistrés !`);
+    toast$(`✓ ${newSales.length} vente(s) et ${newReappros.length} réappro(s) enregistrés !`);
   };
 
   const lowStock   = products.filter(p=>p.stock<=p.minStock);
@@ -231,7 +239,7 @@ export default function App() {
             <div style={{width:38,height:38,borderRadius:12,background:"linear-gradient(135deg,#4f46e5,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>🏨</div>
             <div><div style={{fontWeight:800,fontSize:15,letterSpacing:"-.3px"}}>HôtelBar</div><div style={{fontSize:10,color:"#334155",letterSpacing:1}}>PRO</div></div>
           </div>
-          {[["dashboard","📊","Dashboard"],["stock","📦","Stocks"],["tableau","📋","Tableau"],["ventes","💳","Ventes"],["top","🏆","Classement"]].map(([v,ic,lb])=>(
+          {[["dashboard","📊","Dashboard"],["stock","📦","Stocks"],["tableau","📋","Tableau"],["ventes","📜","Historique"],["top","🏆","Classement"]].map(([v,ic,lb])=>(
             <button key={v} className={`sb-btn${view===v?" active":""}`} onClick={()=>setView(v)}>
               <span style={{fontSize:16}}>{ic}</span>{lb}
               {v==="stock"&&lowStock.length>0&&<span style={{marginLeft:"auto",background:"#ef4444",color:"#fff",borderRadius:20,padding:"1px 8px",fontSize:11,fontWeight:800}}>{lowStock.length}</span>}
@@ -554,46 +562,181 @@ export default function App() {
             </div>
           )}
 
-          {/* ══ VENTES ══ */}
+          {/* ══ HISTORIQUE ══ */}
           {view==="ventes"&&(
             <div className="fade-up">
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:26}}>
+              {/* Header */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
                 <div>
-                  <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Ventes</h1>
-                  <p style={{color:"#475569",fontSize:14}}>{sales.length} transaction(s) · {fmtEur(totalCA)}</p>
+                  <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Historique</h1>
+                  <p style={{color:"#475569",fontSize:14}}>{sales.length} vente(s) · {reappros.length} réappro(s)</p>
                 </div>
-                {sales.length>0&&<button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"9px 18px",fontSize:13}}
-                  onClick={async()=>{if(window.confirm("Effacer tout l'historique ?"))await saveS([]);}}>Tout effacer</button>}
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  {/* Sélecteur mois */}
+                  <button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",width:32,height:32,fontSize:16,padding:0}}
+                    onClick={()=>{ const [y,m]=histMonth.split("-");const d=new Date(+y,+m-2,1);setHistMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); }}>‹</button>
+                  <div style={{background:"#16162a",border:"1px solid #2d2d45",borderRadius:10,padding:"7px 16px",fontWeight:700,fontSize:14,minWidth:140,textAlign:"center"}}>
+                    {MOIS[(+histMonth.split("-")[1])-1]} {histMonth.split("-")[0]}
+                  </div>
+                  <button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",width:32,height:32,fontSize:16,padding:0}}
+                    onClick={()=>{ const [y,m]=histMonth.split("-");const d=new Date(+y,+m,1);const next=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;if(next<=new Date().toISOString().slice(0,7))setHistMonth(next); }}>›</button>
+                  {/* Onglets */}
+                  <div style={{display:"flex",background:"#16162a",border:"1px solid #1e1e35",borderRadius:10,padding:3,marginLeft:8}}>
+                    {[["ventes","💳 Ventes"],["reappros","📦 Réappros"]].map(([t,lb])=>(
+                      <button key={t} className="btn" onClick={()=>setHistTab(t)}
+                        style={{padding:"7px 16px",fontSize:13,background:histTab===t?"linear-gradient(135deg,#4f46e5,#7c3aed)":"transparent",color:histTab===t?"#fff":"#475569",borderRadius:8}}>
+                        {lb}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Effacer */}
+                  {(histTab==="ventes"?sales:reappros).length>0&&(
+                    <button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"8px 14px",fontSize:12,marginLeft:4}}
+                      onClick={async()=>{
+                        if (!window.confirm(`Effacer tout l'historique des ${histTab==="ventes"?"ventes":"réappros"} ?`)) return;
+                        if (histTab==="ventes") await saveS([]);
+                        else { setReappros([]); await dbSet("reappros",[]); }
+                      }}>🗑 Tout effacer</button>
+                  )}
+                </div>
               </div>
-              {sales.length===0
-                ?<div className="card" style={{padding:56,textAlign:"center"}}>
-                  <div style={{fontSize:48,marginBottom:12}}>💳</div>
-                  <p style={{color:"#334155",marginBottom:16}}>Aucune vente enregistrée</p>
-                  <button className="btn" style={{background:"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"#fff",padding:"10px 22px",fontSize:14}} onClick={()=>setView("stock")}>Aller aux stocks →</button>
-                </div>
-                :<div className="card" style={{overflow:"hidden"}}>
-                  <table style={{width:"100%",borderCollapse:"collapse"}}>
-                    <thead>
-                      <tr style={{borderBottom:"1px solid #1e1e35"}}>
-                        {["Date","Article","Qté","Montant","Opérateur"].map(h=>(
-                          <th key={h} style={{padding:"14px 18px",textAlign:"left",fontSize:11,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>
+
+              {/* Contenu selon onglet */}
+              {(()=>{
+                const data = histTab==="ventes" ? sales : reappros;
+                const monthData = data.filter(s=>s.date.startsWith(histMonth));
+
+                if (data.length===0) return (
+                  <div className="card" style={{padding:56,textAlign:"center"}}>
+                    <div style={{fontSize:48,marginBottom:12}}>{histTab==="ventes"?"💳":"📦"}</div>
+                    <p style={{color:"#334155",marginBottom:16}}>Aucun historique enregistré</p>
+                    <button className="btn" style={{background:"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"#fff",padding:"10px 22px",fontSize:14}} onClick={()=>setView("tableau")}>Aller au tableau →</button>
+                  </div>
+                );
+
+                if (monthData.length===0) return (
+                  <div>
+                    {/* Récap mois disponibles */}
+                    <div className="card" style={{padding:20,marginBottom:16}}>
+                      <p style={{color:"#475569",fontSize:13,marginBottom:14}}>Aucune donnée pour ce mois. Mois disponibles :</p>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                        {[...new Set(data.map(s=>s.date.slice(0,7)))].sort().reverse().map(m=>(
+                          <button key={m} className="btn" onClick={()=>setHistMonth(m)}
+                            style={{background:"#1e1e35",color:"#818cf8",border:"1px solid #2d2d45",padding:"6px 14px",fontSize:13}}>
+                            {MOIS[(+m.split("-")[1])-1]} {m.split("-")[0]}
+                          </button>
                         ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...sales].reverse().map((s,i)=>(
-                        <tr key={s.id} style={{borderBottom:"1px solid #1e1e3520",background:i%2?"rgba(255,255,255,.01)":"transparent"}}>
-                          <td style={{padding:"13px 18px",fontSize:12,color:"#475569"}}>{new Date(s.date).toLocaleString("fr-FR")}</td>
-                          <td style={{padding:"13px 18px",fontWeight:600}}>{s.productName}</td>
-                          <td style={{padding:"13px 18px",color:"#38bdf8",fontWeight:600}}>×{s.qty}</td>
-                          <td style={{padding:"13px 18px",color:"#4ade80",fontWeight:700}}>{fmtEur(s.amount)}</td>
-                          <td style={{padding:"13px 18px"}}><span style={{background:"#1e1e35",borderRadius:6,padding:"3px 9px",fontSize:11,color:"#818cf8",fontWeight:600}}>{s.by||"—"}</span></td>
-                        </tr>
+                      </div>
+                    </div>
+                  </div>
+                );
+
+                // Grouper par jour
+                const byDay = {};
+                monthData.forEach(s=>{
+                  const day=s.date.slice(0,10);
+                  if (!byDay[day]) byDay[day]=[];
+                  byDay[day].push(s);
+                });
+                const days=Object.keys(byDay).sort().reverse();
+
+                // Totaux du mois
+                const monthTotal = histTab==="ventes"
+                  ? monthData.reduce((s,x)=>s+x.amount,0)
+                  : monthData.reduce((s,x)=>s+x.qty,0);
+
+                return (
+                  <div>
+                    {/* Récap mensuel */}
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:20}}>
+                      {histTab==="ventes"?[
+                        {label:"CA du mois",  val:fmtEur(monthTotal),           color:"#4ade80"},
+                        {label:"Nb ventes",   val:monthData.length,             color:"#818cf8"},
+                        {label:"Jours actifs",val:days.length,                  color:"#38bdf8"},
+                      ]:[
+                        {label:"Total réappros", val:`${monthTotal} unités`,    color:"#4ade80"},
+                        {label:"Nb opérations",  val:monthData.length,          color:"#818cf8"},
+                        {label:"Jours actifs",   val:days.length,               color:"#38bdf8"},
+                      ].map((k,i)=>(
+                        <div key={i} className="stat" style={{padding:16}}>
+                          <div style={{fontSize:10,color:"#334155",fontWeight:700,letterSpacing:1,marginBottom:8}}>{k.label.toUpperCase()}</div>
+                          <div style={{fontSize:22,fontWeight:800,color:k.color}}>{k.val}</div>
+                        </div>
                       ))}
-                    </tbody>
-                  </table>
-                </div>
-              }
+                    </div>
+
+                    {/* Accordéon par jour */}
+                    <div style={{display:"grid",gap:10}}>
+                      {days.map(day=>{
+                        const items=byDay[day];
+                        const isOpen=openDays[day]!==false; // ouvert par défaut
+                        const dayTotal=histTab==="ventes"
+                          ? items.reduce((s,x)=>s+x.amount,0)
+                          : items.reduce((s,x)=>s+x.qty,0);
+                        const dateLabel=new Date(day).toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"});
+
+                        return(
+                          <div key={day} className="card" style={{overflow:"hidden"}}>
+                            {/* Header jour */}
+                            <div onClick={()=>setOpenDays(d=>({...d,[day]:!isOpen}))}
+                              style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"14px 18px",cursor:"pointer",background:"#111120",userSelect:"none"}}>
+                              <div style={{display:"flex",alignItems:"center",gap:12}}>
+                                <div style={{width:36,height:36,borderRadius:10,background:"linear-gradient(135deg,#312e81,#4c1d95)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800,color:"#fff",flexShrink:0}}>
+                                  {new Date(day).getDate()}
+                                </div>
+                                <div>
+                                  <div style={{fontWeight:700,fontSize:14,textTransform:"capitalize"}}>{dateLabel}</div>
+                                  <div style={{fontSize:12,color:"#475569"}}>{items.length} opération{items.length>1?"s":""}</div>
+                                </div>
+                              </div>
+                              <div style={{display:"flex",alignItems:"center",gap:16}}>
+                                <span style={{fontWeight:800,fontSize:15,color:histTab==="ventes"?"#4ade80":"#38bdf8"}}>
+                                  {histTab==="ventes"?fmtEur(dayTotal):`+${dayTotal} unités`}
+                                </span>
+                                <span style={{color:"#475569",fontSize:18,transition:"transform .2s",transform:isOpen?"rotate(90deg)":"rotate(0deg)"}}>›</span>
+                              </div>
+                            </div>
+
+                            {/* Détail du jour */}
+                            {isOpen&&(
+                              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                                <thead>
+                                  <tr style={{borderBottom:"1px solid #1e1e35",background:"#0d0d1a"}}>
+                                    {histTab==="ventes"
+                                      ?["Heure","Article","Qté","Montant","Opérateur"].map(h=><th key={h} style={{padding:"10px 18px",textAlign:"left",fontSize:10,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>)
+                                      :["Heure","Article","Qté ajoutée","Opérateur"].map(h=><th key={h} style={{padding:"10px 18px",textAlign:"left",fontSize:10,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>)
+                                    }
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {[...items].sort((a,b)=>b.date.localeCompare(a.date)).map((s,i)=>(
+                                    <tr key={s.id} style={{borderBottom:"1px solid #1e1e3520",background:i%2?"rgba(255,255,255,.01)":"transparent"}}>
+                                      <td style={{padding:"11px 18px",fontSize:12,color:"#475569",whiteSpace:"nowrap"}}>{new Date(s.date).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</td>
+                                      <td style={{padding:"11px 18px",fontWeight:600,fontSize:13}}>{s.productName}</td>
+                                      <td style={{padding:"11px 18px",color:"#38bdf8",fontWeight:600}}>×{s.qty}</td>
+                                      {histTab==="ventes"&&<td style={{padding:"11px 18px",color:"#4ade80",fontWeight:700}}>{fmtEur(s.amount)}</td>}
+                                      <td style={{padding:"11px 18px"}}><span style={{background:"#1e1e35",borderRadius:6,padding:"2px 8px",fontSize:11,color:"#818cf8",fontWeight:600}}>{s.by||"—"}</span></td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                {items.length>1&&histTab==="ventes"&&(
+                                  <tfoot>
+                                    <tr style={{borderTop:"1px solid #1e1e35",background:"#0d0d1a"}}>
+                                      <td colSpan={3} style={{padding:"10px 18px",fontSize:12,color:"#475569",fontWeight:600}}>Total du jour</td>
+                                      <td style={{padding:"10px 18px",color:"#4ade80",fontWeight:800,fontSize:14}}>{fmtEur(dayTotal)}</td>
+                                      <td/>
+                                    </tr>
+                                  </tfoot>
+                                )}
+                              </table>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
