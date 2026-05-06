@@ -34,6 +34,8 @@ export default function App() {
   const [histMonth,   setHistMonth]  = useState(() => { const n=new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; });
   const [histTab,     setHistTab]    = useState("ventes"); // "ventes" | "reappros"
   const [openDays,    setOpenDays]   = useState({});       // {date: true} pour accordéon
+  const [topMonth,    setTopMonth]   = useState(() => { const n=new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; });
+  const [topMode,     setTopMode]    = useState("mois"); // "mois" | "global"
   const [filterCat,   setFilterCat]  = useState("all");
   const [search,      setSearch]     = useState("");
   const [tableEdits,  setTableEdits] = useState({});
@@ -106,7 +108,13 @@ export default function App() {
 
   const handleRestock = async () => {
     const latest=await dbGet("products")||products;
-    await saveP(latest.map(p=>p.id===restockModal.id?{...p,stock:p.stock+ +restockQty}:p));
+    const p=latest.find(x=>x.id===restockModal.id);
+    await saveP(latest.map(x=>x.id===restockModal.id?{...x,stock:x.stock+ +restockQty}:x));
+    // Sauvegarder dans l'historique réappros
+    const latestReappros=await dbGet("reappros")||reappros;
+    const nr={id:Date.now(),productId:restockModal.id,productName:restockModal.name,qty:+restockQty,date:new Date().toISOString(),by:myId.current};
+    setReappros([...latestReappros,nr]);
+    await dbSet("reappros",[...latestReappros,nr]);
     toast$("Stock réapprovisionné !"); setRestockModal(null); setRestockQty(0);
   };
 
@@ -743,34 +751,121 @@ export default function App() {
           {/* ══ CLASSEMENT ══ */}
           {view==="top"&&(
             <div className="fade-up">
-              <div style={{marginBottom:26}}>
-                <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Classement</h1>
-                <p style={{color:"#475569",fontSize:14}}>Temps réel · Firebase</p>
+              {/* Header */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
+                <div>
+                  <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Classement</h1>
+                  <p style={{color:"#475569",fontSize:14}}>
+                    {topMode==="mois"?`${MOIS[(+topMonth.split("-")[1])-1]} ${topMonth.split("-")[0]}`:"Tous les temps"}
+                  </p>
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  {/* Toggle global/mois */}
+                  <div style={{display:"flex",background:"#16162a",border:"1px solid #1e1e35",borderRadius:10,padding:3}}>
+                    {[["mois","📅 Par mois"],["global","🌍 Global"]].map(([m,lb])=>(
+                      <button key={m} className="btn" onClick={()=>setTopMode(m)}
+                        style={{padding:"7px 16px",fontSize:13,background:topMode===m?"linear-gradient(135deg,#4f46e5,#7c3aed)":"transparent",color:topMode===m?"#fff":"#475569",borderRadius:8}}>
+                        {lb}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Sélecteur mois (visible seulement en mode mois) */}
+                  {topMode==="mois"&&<>
+                    <button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",width:32,height:32,fontSize:16,padding:0}}
+                      onClick={()=>{ const [y,m]=topMonth.split("-");const d=new Date(+y,+m-2,1);setTopMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); }}>‹</button>
+                    <div style={{background:"#16162a",border:"1px solid #2d2d45",borderRadius:10,padding:"7px 16px",fontWeight:700,fontSize:14,minWidth:140,textAlign:"center"}}>
+                      {MOIS[(+topMonth.split("-")[1])-1]} {topMonth.split("-")[0]}
+                    </div>
+                    <button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",width:32,height:32,fontSize:16,padding:0}}
+                      onClick={()=>{ const [y,m]=topMonth.split("-");const d=new Date(+y,+m,1);const next=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;if(next<=new Date().toISOString().slice(0,7))setTopMonth(next); }}>›</button>
+                  </>}
+                </div>
               </div>
-              <div style={{display:"grid",gap:12}}>
-                {topSellers.map((p,i)=>{
-                  const cat=getCat(p.categoryId);const mx=Math.max(...products.map(x=>x.sold),1);
-                  return(
-                    <div key={p.id} className="card" style={{padding:"18px 22px",display:"flex",alignItems:"center",gap:16}}>
-                      <div style={{width:44,height:44,borderRadius:12,background:i<3?`${["#fbbf24","#94a3b8","#d97706"][i]}18`:"#1e1e35",display:"flex",alignItems:"center",justifyContent:"center",fontSize:i<3?22:13,fontWeight:800,color:i<3?["#fbbf24","#94a3b8","#d97706"][i]:"#334155",flexShrink:0}}>
-                        {i<3?["🥇","🥈","🥉"][i]:`#${i+1}`}
+
+              {(()=>{
+                // Calcul du classement selon le mode
+                let ranked=[];
+                if (topMode==="global") {
+                  // Basé sur le compteur sold des produits
+                  ranked=[...products].sort((a,b)=>b.sold-a.sold).map(p=>({
+                    productId:p.id, name:p.name, categoryId:p.categoryId,
+                    qty:p.sold, ca:p.sold*p.price
+                  }));
+                } else {
+                  // Basé sur les ventes du mois sélectionné
+                  const monthSalesTop=sales.filter(s=>s.date.startsWith(topMonth));
+                  const map={};
+                  monthSalesTop.forEach(s=>{
+                    if (!map[s.productId]) {
+                      const prod=products.find(p=>p.id===s.productId);
+                      map[s.productId]={productId:s.productId,name:s.productName,categoryId:prod?.categoryId,qty:0,ca:0};
+                    }
+                    map[s.productId].qty+=s.qty;
+                    map[s.productId].ca+=s.amount;
+                  });
+                  ranked=Object.values(map).sort((a,b)=>b.ca-a.ca);
+                }
+
+                const maxCA=Math.max(...ranked.map(r=>r.ca),1);
+                const totalMonthCA=ranked.reduce((s,r)=>s+r.ca,0);
+                const totalMonthQty=ranked.reduce((s,r)=>s+r.qty,0);
+
+                if (ranked.length===0) return (
+                  <div className="card" style={{padding:48,textAlign:"center"}}>
+                    <div style={{fontSize:48,marginBottom:12}}>🏆</div>
+                    <p style={{color:"#334155"}}>Aucune vente {topMode==="mois"?"ce mois":"enregistrée"}</p>
+                  </div>
+                );
+
+                return(
+                  <div>
+                    {/* Récap */}
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:20}}>
+                      <div className="stat" style={{padding:16}}>
+                        <div style={{fontSize:10,color:"#334155",fontWeight:700,letterSpacing:1,marginBottom:8}}>CA {topMode==="mois"?"DU MOIS":"TOTAL"}</div>
+                        <div style={{fontSize:22,fontWeight:800,color:"#4ade80"}}>{fmtEur(totalMonthCA)}</div>
                       </div>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-                          <span style={{fontWeight:700,fontSize:15}}>{cat.icon} {p.name}</span>
-                          <span className="pill" style={{background:`${cat.color}18`,color:cat.color}}>{cat.name}</span>
-                        </div>
-                        <div className="prog-track" style={{maxWidth:300}}><div className="prog-fill" style={{width:`${(p.sold/mx)*100}%`,background:cat.color}}/></div>
-                        <div style={{fontSize:11,color:"#334155",marginTop:4}}>{p.sold} vendus</div>
-                      </div>
-                      <div style={{textAlign:"right",flexShrink:0}}>
-                        <div style={{fontSize:20,fontWeight:800,color:"#4ade80"}}>{fmtEur(p.sold*p.price)}</div>
-                        <div style={{fontSize:12,color:"#475569"}}>{fmtEur(p.price)} / u</div>
+                      <div className="stat" style={{padding:16}}>
+                        <div style={{fontSize:10,color:"#334155",fontWeight:700,letterSpacing:1,marginBottom:8}}>ARTICLES VENDUS</div>
+                        <div style={{fontSize:22,fontWeight:800,color:"#818cf8"}}>{totalMonthQty}</div>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
+
+                    {/* Classement */}
+                    <div style={{display:"grid",gap:10}}>
+                      {ranked.map((r,i)=>{
+                        const cat=getCat(r.categoryId);
+                        const share=totalMonthCA>0?Math.round((r.ca/totalMonthCA)*100):0;
+                        return(
+                          <div key={r.productId||i} className="card" style={{padding:"16px 20px",display:"flex",alignItems:"center",gap:16,transition:"border-color .2s"}}>
+                            {/* Médaille */}
+                            <div style={{width:44,height:44,borderRadius:12,background:i<3?`${["#fbbf24","#94a3b8","#d97706"][i]}18`:"#1e1e35",display:"flex",alignItems:"center",justifyContent:"center",fontSize:i<3?22:13,fontWeight:800,color:i<3?["#fbbf24","#94a3b8","#d97706"][i]:"#334155",flexShrink:0}}>
+                              {i<3?["🥇","🥈","🥉"][i]:`#${i+1}`}
+                            </div>
+                            {/* Info */}
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                                <span style={{fontWeight:700,fontSize:15}}>{cat.icon} {r.name}</span>
+                                <span className="pill" style={{background:`${cat.color}18`,color:cat.color}}>{cat.name}</span>
+                                <span style={{marginLeft:"auto",fontSize:11,color:"#475569",fontWeight:600}}>{share}%</span>
+                              </div>
+                              <div className="prog-track" style={{maxWidth:340}}>
+                                <div className="prog-fill" style={{width:`${(r.ca/maxCA)*100}%`,background:i===0?"linear-gradient(90deg,#4f46e5,#818cf8)":cat.color}}/>
+                              </div>
+                              <div style={{fontSize:11,color:"#334155",marginTop:4}}>{r.qty} unités vendues</div>
+                            </div>
+                            {/* CA */}
+                            <div style={{textAlign:"right",flexShrink:0}}>
+                              <div style={{fontSize:20,fontWeight:800,color:"#4ade80"}}>{fmtEur(r.ca)}</div>
+                              <div style={{fontSize:12,color:"#475569"}}>{fmtEur(r.ca/Math.max(r.qty,1))} / u</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </main>
