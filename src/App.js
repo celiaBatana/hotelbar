@@ -43,6 +43,9 @@ export default function App() {
 
   const [sellModal,    setSellModal]   = useState(null);
   const [sellQty,      setSellQty]     = useState(1);
+  const [sellDate,     setSellDate]    = useState(""); // date custom pour modal vente
+  const [tableDate,    setTableDate]   = useState(""); // date custom pour tableau
+  const [editSaleModal,setEditSaleModal]=useState(null); // édition d'une vente existante
   const [addModal,     setAddModal]    = useState(false);
   const [editModal,    setEditModal]   = useState(null);
   const [restockModal, setRestockModal]= useState(null);
@@ -82,12 +85,13 @@ export default function App() {
     if (!p||p.stock<sellQty) { toast$("Stock insuffisant !","err"); return; }
     const upP = latest.map(x=>x.id===p.id?{...x,stock:x.stock-sellQty,sold:x.sold+sellQty}:x);
     const latS = await dbGet("sales")||sales;
-    const ns = {id:Date.now(),productId:p.id,productName:p.name,qty:sellQty,amount:p.price*sellQty,date:new Date().toISOString(),by:myId.current};
+    const saleDate = sellDate ? new Date(sellDate).toISOString() : new Date().toISOString();
+    const ns = {id:Date.now(),productId:p.id,productName:p.name,qty:sellQty,amount:p.price*sellQty,date:saleDate,by:myId.current};
     await Promise.all([saveP(upP),saveS([...latS,ns])]);
     const rem=p.stock-sellQty;
     if (rem<=p.minStock) toast$(`⚠️ Stock bas : ${p.name} (${rem} restants)`,"warn");
     else toast$(`✓ ${sellQty}× ${p.name}`);
-    setSellModal(null); setSellQty(1);
+    setSellModal(null); setSellQty(1); setSellDate("");
   };
 
   const handleAdd = async () => {
@@ -137,6 +141,16 @@ export default function App() {
     await saveC(categories.filter(c=>c.id!==id)); toast$("Catégorie supprimée","warn");
   };
 
+  const handleEditSale = async () => {
+    if (!editSaleModal) return;
+    const latS = await dbGet("sales")||sales;
+    const updated = latS.map(s=>s.id===editSaleModal.id
+      ? {...s, qty:+editSaleModal.qty, amount:+editSaleModal.qty*(editSaleModal.price||s.amount/s.qty), date:editSaleModal.date?new Date(editSaleModal.date).toISOString():s.date}
+      : s);
+    await saveS(updated);
+    setEditSaleModal(null); toast$("Vente modifiée !");
+  };
+
   const handleTableValidate = async () => {
     const hasChanges=Object.values(tableEdits).some(e=>(parseInt(e.sell)||0)>0||(parseInt(e.restock)||0)>0);
     if (!hasChanges) { toast$("Aucune modification à enregistrer","err"); return; }
@@ -146,18 +160,19 @@ export default function App() {
     const latestReappros=await dbGet("reappros")||[];
     const newSales=[];
     const newReappros=[];
+    const useDate = tableDate ? new Date(tableDate).toISOString() : new Date().toISOString();
     const updatedProds=latest.map(p=>{
       const edits=tableEdits[p.id]||{};
       const sellQ=parseInt(edits.sell)||0;
       const restQ=parseInt(edits.restock)||0;
       if (sellQ>p.stock) return p;
-      if (sellQ>0) newSales.push({id:Date.now()+p.id,productId:p.id,productName:p.name,qty:sellQ,amount:p.price*sellQ,date:new Date().toISOString(),by:myId.current});
-      if (restQ>0) newReappros.push({id:Date.now()+p.id+1,productId:p.id,productName:p.name,qty:restQ,date:new Date().toISOString(),by:myId.current});
+      if (sellQ>0) newSales.push({id:Date.now()+p.id,productId:p.id,productName:p.name,qty:sellQ,amount:p.price*sellQ,date:useDate,by:myId.current});
+      if (restQ>0) newReappros.push({id:Date.now()+p.id+1,productId:p.id,productName:p.name,qty:restQ,date:useDate,by:myId.current});
       return {...p,stock:p.stock-sellQ+restQ,sold:p.sold+sellQ};
     });
     await Promise.all([saveP(updatedProds),saveS([...latestSales,...newSales]),dbSet("reappros",[...latestReappros,...newReappros])]);
     setTableEdits({}); setTableSaving(false);
-    toast$(`✓ ${newSales.length} vente(s) et ${newReappros.length} réappro(s) enregistrés !`);
+    toast$(`✓ ${newSales.length} vente(s) et ${newReappros.length} réappro(s) — ${tableDate?new Date(tableDate).toLocaleDateString("fr-FR"):"aujourd'hui"}`);
   };
 
   const lowStock   = products.filter(p=>p.stock<=p.minStock);
@@ -480,6 +495,13 @@ export default function App() {
                   <p style={{color:"#475569",fontSize:14}}>Saisie rapide — ventes et réappros en une seule fois</p>
                 </div>
                 <div style={{display:"flex",gap:10}}>
+                  {/* Sélecteur de date pour le tableau */}
+                  <div style={{display:"flex",alignItems:"center",gap:8,background:"#16162a",border:"1px solid #2d2d45",borderRadius:10,padding:"8px 14px"}}>
+                    <span style={{fontSize:13,color:"#475569",whiteSpace:"nowrap"}}>📅 Date :</span>
+                    <input type="date" value={tableDate} onChange={e=>setTableDate(e.target.value)}
+                      style={{background:"transparent",border:"none",color:tableDate?"#e2e8f0":"#475569",fontFamily:"inherit",fontSize:13,outline:"none",cursor:"pointer"}}/>
+                    {tableDate&&<button onClick={()=>setTableDate("")} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:14,padding:0}}>✕</button>}
+                  </div>
                   {Object.values(tableEdits).some(e=>(parseInt(e.sell)||0)>0||(parseInt(e.restock)||0)>0)&&(
                     <button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"10px 18px",fontSize:13}} onClick={()=>setTableEdits({})}>↺ Vider</button>
                   )}
@@ -657,15 +679,15 @@ export default function App() {
                   <div>
                     {/* Récap mensuel */}
                     <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:20}}>
-                      {histTab==="ventes"?[
-                        {label:"CA du mois",  val:fmtEur(monthTotal),           color:"#4ade80"},
-                        {label:"Nb ventes",   val:monthData.length,             color:"#818cf8"},
-                        {label:"Jours actifs",val:days.length,                  color:"#38bdf8"},
+                      {(histTab==="ventes"?[
+                        {label:"CA du mois",  val:fmtEur(monthTotal),        color:"#4ade80"},
+                        {label:"Nb ventes",   val:monthData.length,          color:"#818cf8"},
+                        {label:"Jours actifs",val:days.length,               color:"#38bdf8"},
                       ]:[
-                        {label:"Total réappros", val:`${monthTotal} unités`,    color:"#4ade80"},
-                        {label:"Nb opérations",  val:monthData.length,          color:"#818cf8"},
-                        {label:"Jours actifs",   val:days.length,               color:"#38bdf8"},
-                      ].map((k,i)=>(
+                        {label:"Total réappros",val:`${monthTotal} unités`,  color:"#4ade80"},
+                        {label:"Nb opérations", val:monthData.length,        color:"#818cf8"},
+                        {label:"Jours actifs",  val:days.length,             color:"#38bdf8"},
+                      ]).map((k,i)=>(
                         <div key={i} className="stat" style={{padding:16}}>
                           <div style={{fontSize:10,color:"#334155",fontWeight:700,letterSpacing:1,marginBottom:8}}>{k.label.toUpperCase()}</div>
                           <div style={{fontSize:22,fontWeight:800,color:k.color}}>{k.val}</div>
@@ -711,7 +733,7 @@ export default function App() {
                                 <thead>
                                   <tr style={{borderBottom:"1px solid #1e1e35",background:"#0d0d1a"}}>
                                     {histTab==="ventes"
-                                      ?["Heure","Article","Qté","Montant","Opérateur"].map(h=><th key={h} style={{padding:"10px 18px",textAlign:"left",fontSize:10,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>)
+                                      ?["Heure","Article","Qté","Montant","Opérateur",""].map(h=><th key={h} style={{padding:"10px 18px",textAlign:"left",fontSize:10,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>)
                                       :["Heure","Article","Qté ajoutée","Opérateur"].map(h=><th key={h} style={{padding:"10px 18px",textAlign:"left",fontSize:10,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>)
                                     }
                                   </tr>
@@ -724,6 +746,10 @@ export default function App() {
                                       <td style={{padding:"11px 18px",color:"#38bdf8",fontWeight:600}}>×{s.qty}</td>
                                       {histTab==="ventes"&&<td style={{padding:"11px 18px",color:"#4ade80",fontWeight:700}}>{fmtEur(s.amount)}</td>}
                                       <td style={{padding:"11px 18px"}}><span style={{background:"#1e1e35",borderRadius:6,padding:"2px 8px",fontSize:11,color:"#818cf8",fontWeight:600}}>{s.by||"—"}</span></td>
+                                      {histTab==="ventes"&&<td style={{padding:"8px 18px"}}>
+                                        <button className="btn" style={{background:"#1e1e35",color:"#818cf8",border:"1px solid #2d2d45",padding:"4px 10px",fontSize:11}}
+                                          onClick={()=>setEditSaleModal({...s,date:s.date.slice(0,10),price:+(s.amount/s.qty).toFixed(2)})}>✏️ Modifier</button>
+                                      </td>}
                                     </tr>
                                   ))}
                                 </tbody>
@@ -732,7 +758,7 @@ export default function App() {
                                     <tr style={{borderTop:"1px solid #1e1e35",background:"#0d0d1a"}}>
                                       <td colSpan={3} style={{padding:"10px 18px",fontSize:12,color:"#475569",fontWeight:600}}>Total du jour</td>
                                       <td style={{padding:"10px 18px",color:"#4ade80",fontWeight:800,fontSize:14}}>{fmtEur(dayTotal)}</td>
-                                      <td/>
+                                      <td/><td/>
                                     </tr>
                                   </tfoot>
                                 )}
@@ -873,25 +899,31 @@ export default function App() {
 
       {/* ════ MODALS ════ */}
       {sellModal&&(
-        <div className="modal-bg" onClick={()=>setSellModal(null)}>
-          <div className="card m-in" style={{padding:32,width:380,maxWidth:"100%"}} onClick={e=>e.stopPropagation()}>
+        <div className="modal-bg" onClick={()=>{setSellModal(null);setSellDate("");}}>
+          <div className="card m-in" style={{padding:32,width:400,maxWidth:"100%"}} onClick={e=>e.stopPropagation()}>
             {(()=>{const cat=getCat(sellModal.categoryId);return(<>
               <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
                 <div style={{width:46,height:46,borderRadius:14,background:`${cat.color}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>{cat.icon}</div>
                 <div><div style={{fontWeight:800,fontSize:18}}>{sellModal.name}</div><div style={{fontSize:13,color:"#475569"}}>{fmtEur(sellModal.price)} / {sellModal.unit}</div></div>
               </div>
               <label style={{fontSize:11,color:"#475569",display:"block",marginBottom:8,fontWeight:700,letterSpacing:.8}}>QUANTITÉ</label>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
                 <button className="btn" style={{background:"#1e1e35",color:"#e2e8f0",width:44,height:44,fontSize:22,border:"1px solid #2d2d45"}} onClick={()=>setSellQty(q=>Math.max(1,q-1))}>−</button>
                 <input className="input" type="number" min="1" max={sellModal.stock} value={sellQty} onChange={e=>setSellQty(+e.target.value)} style={{textAlign:"center",fontSize:22,fontWeight:800}}/>
                 <button className="btn" style={{background:"#1e1e35",color:"#e2e8f0",width:44,height:44,fontSize:22,border:"1px solid #2d2d45"}} onClick={()=>setSellQty(q=>Math.min(sellModal.stock,q+1))}>+</button>
               </div>
+              {/* Date personnalisée */}
+              <div style={{marginBottom:16}}>
+                <label style={{fontSize:11,color:"#475569",display:"block",marginBottom:6,fontWeight:700,letterSpacing:.8}}>DATE (optionnel — aujourd'hui par défaut)</label>
+                <input className="input" type="date" value={sellDate} onChange={e=>setSellDate(e.target.value)}
+                  style={{color:sellDate?"#e2e8f0":"#475569"}}/>
+              </div>
               <div style={{background:"rgba(129,140,248,.08)",border:"1px solid rgba(129,140,248,.2)",borderRadius:12,padding:"14px 18px",marginBottom:22,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <span style={{color:"#64748b"}}>Total</span>
+                <span style={{color:"#64748b"}}>{sellDate?new Date(sellDate).toLocaleDateString("fr-FR",{weekday:"short",day:"numeric",month:"short"}):"Aujourd'hui"}</span>
                 <span style={{fontWeight:800,fontSize:24,color:"#818cf8"}}>{fmtEur(sellModal.price*sellQty)}</span>
               </div>
               <div style={{display:"flex",gap:10}}>
-                <button className="btn" style={{flex:1,background:"#1e1e35",color:"#64748b",padding:13,border:"1px solid #2d2d45"}} onClick={()=>setSellModal(null)}>Annuler</button>
+                <button className="btn" style={{flex:1,background:"#1e1e35",color:"#64748b",padding:13,border:"1px solid #2d2d45"}} onClick={()=>{setSellModal(null);setSellDate("");}}>Annuler</button>
                 <button className="btn" style={{flex:2,background:"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"#fff",padding:13,fontSize:15,boxShadow:"0 4px 20px rgba(99,102,241,.3)"}} onClick={handleSell}>✓ Confirmer</button>
               </div>
             </>);})()} 
@@ -1000,6 +1032,36 @@ export default function App() {
               <button className="btn" style={{width:"100%",background:"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"#fff",padding:"12px 0",fontSize:14,marginTop:16}} onClick={handleAddCat}>+ Créer la catégorie</button>
             </div>
             <button className="btn" style={{width:"100%",background:"#1e1e35",color:"#64748b",padding:12,marginTop:14,border:"1px solid #2d2d45"}} onClick={()=>setCatModal(false)}>Fermer</button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal édition vente */}
+      {editSaleModal&&(
+        <div className="modal-bg" onClick={()=>setEditSaleModal(null)}>
+          <div className="card m-in" style={{padding:32,width:400,maxWidth:"100%"}} onClick={e=>e.stopPropagation()}>
+            <h2 style={{fontWeight:800,fontSize:18,marginBottom:6}}>✏️ Modifier la vente</h2>
+            <p style={{color:"#475569",fontSize:13,marginBottom:20}}>{editSaleModal.productName}</p>
+            <div style={{display:"grid",gap:14}}>
+              <div>
+                <label style={{fontSize:11,color:"#475569",display:"block",marginBottom:6,fontWeight:700,letterSpacing:.8}}>DATE</label>
+                <input className="input" type="date" value={editSaleModal.date}
+                  onChange={e=>setEditSaleModal(x=>({...x,date:e.target.value}))}/>
+              </div>
+              <div>
+                <label style={{fontSize:11,color:"#475569",display:"block",marginBottom:6,fontWeight:700,letterSpacing:.8}}>QUANTITÉ</label>
+                <input className="input" type="number" min="1" value={editSaleModal.qty}
+                  onChange={e=>setEditSaleModal(x=>({...x,qty:e.target.value}))}/>
+              </div>
+            </div>
+            <div style={{background:"rgba(74,222,128,.07)",border:"1px solid rgba(74,222,128,.2)",borderRadius:10,padding:12,marginTop:16,marginBottom:20,display:"flex",justifyContent:"space-between"}}>
+              <span style={{color:"#64748b",fontSize:13}}>Nouveau montant</span>
+              <span style={{fontWeight:700,color:"#4ade80"}}>{fmtEur(+editSaleModal.qty*editSaleModal.price)}</span>
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button className="btn" style={{flex:1,background:"#1e1e35",color:"#64748b",padding:13,border:"1px solid #2d2d45"}} onClick={()=>setEditSaleModal(null)}>Annuler</button>
+              <button className="btn" style={{flex:2,background:"linear-gradient(135deg,#38bdf8,#818cf8)",color:"#fff",padding:13,fontSize:15}} onClick={handleEditSale}>✓ Enregistrer</button>
+            </div>
           </div>
         </div>
       )}
