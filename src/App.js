@@ -252,6 +252,8 @@ export default function App() {
         .icon-btn{cursor:pointer;border:none;background:none;font-size:15px;padding:6px 8px;border-radius:8px;transition:background .15s;color:#64748b}.icon-btn:hover{background:#1e1e35;color:#e2e8f0}
         .tbl-in{background:#1a1a2e;border:1.5px solid #2d2d45;border-radius:8px;color:#e2e8f0;font-family:inherit;padding:6px 4px;text-align:center;font-size:14px;outline:none;width:58px;transition:border .15s}
         .tbl-in:focus{border-color:#818cf8}
+        .no-arrows::-webkit-outer-spin-button,.no-arrows::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+        .no-arrows{-moz-appearance:textfield}
         .sm-btn{cursor:pointer;border:1px solid #2d2d45;background:#1e1e35;color:#e2e8f0;border-radius:6px;width:26px;height:26px;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
         .sm-btn:hover{background:#2d2d45}
       `}</style>
@@ -563,13 +565,13 @@ export default function App() {
                                 style={{borderColor:sellQ>0?"#818cf8":"#2d2d45",color:sellQ>0?"#818cf8":"#e2e8f0",fontWeight:sellQ>0?700:400}}
                                 onChange={ev=>setE("sell",ev.target.value)}/>
                               <button className="sm-btn" onClick={()=>setE("sell",Math.min(p.stock,sellQ+1))}>+</button>
-                              {sellQ>0&&<span style={{fontSize:11,color:isPromo?"#f59e0b":"#818cf8",fontWeight:700,whiteSpace:"nowrap",marginLeft:2}}>{fmtEur(effectivePrice*sellQ)}</span>}
+                              {sellQ>0&&<span style={{fontSize:11,color:isPromo?"#f59e0b":"#818cf8",fontWeight:700,whiteSpace:"nowrap"}}>{fmtEur(effectivePrice*sellQ)}</span>}
                             </div>
                           </td>
                           {/* Prix promo */}
                           <td style={{padding:"8px 14px"}}>
                             <div style={{display:"flex",alignItems:"center",gap:4}}>
-                              <input className="tbl-in" type="number" min="0" step="0.01" value={edits.promo||""} placeholder="—"
+                              <input className="tbl-in no-arrows" type="number" min="0" step="0.01" value={edits.promo||""} placeholder="—"
                                 style={{width:70,borderColor:isPromo?"#f59e0b":"#2d2d45",color:isPromo?"#f59e0b":"#475569",fontWeight:isPromo?700:400}}
                                 onChange={ev=>setE("promo",ev.target.value)}/>
                               {isPromo&&<button onClick={()=>setE("promo","")} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>}
