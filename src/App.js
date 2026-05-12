@@ -166,7 +166,10 @@ export default function App() {
       const sellQ=parseInt(edits.sell)||0;
       const restQ=parseInt(edits.restock)||0;
       if (sellQ>p.stock) return p;
-      if (sellQ>0) newSales.push({id:Date.now()+p.id,productId:p.id,productName:p.name,qty:sellQ,amount:p.price*sellQ,date:useDate,by:myId.current});
+      if (sellQ>0) newSales.push({id:Date.now()+p.id,productId:p.id,productName:p.name,qty:sellQ,
+        amount:(parseFloat(edits.promo)>0?parseFloat(edits.promo):p.price)*sellQ,
+        promo:parseFloat(edits.promo)>0?parseFloat(edits.promo):null,
+        date:useDate,by:myId.current});
       if (restQ>0) newReappros.push({id:Date.now()+p.id+1,productId:p.id,productName:p.name,qty:restQ,date:useDate,by:myId.current});
       return {...p,stock:p.stock-sellQ+restQ,sold:p.sold+sellQ};
     });
@@ -514,8 +517,8 @@ export default function App() {
                 <table style={{width:"100%",borderCollapse:"collapse",minWidth:820}}>
                   <thead>
                     <tr style={{borderBottom:"2px solid #1e1e35",background:"#0f0f1a"}}>
-                      {["Article","Catégorie","Prix / u","Stock","Min","Ventes","Réappro","Nouveau stock"].map(h=>(
-                        <th key={h} style={{padding:"13px 14px",textAlign:"left",fontSize:11,color:"#475569",fontWeight:700,letterSpacing:.6,whiteSpace:"nowrap"}}>{h.toUpperCase()}</th>
+                      {["Article","Catégorie","Prix / u","Stock","Min","Ventes","Prix promo","Réappro","Nouveau stock"].map(h=>(
+                        <th key={h} style={{padding:"13px 14px",textAlign:"left",fontSize:11,color:h==="Prix promo"?"#f59e0b":"#475569",fontWeight:700,letterSpacing:.6,whiteSpace:"nowrap"}}>{h.toUpperCase()}</th>
                       ))}
                     </tr>
                   </thead>
@@ -526,20 +529,27 @@ export default function App() {
                       const edits=tableEdits[p.id]||{};
                       const sellQ=parseInt(edits.sell)||0;
                       const restQ=parseInt(edits.restock)||0;
+                      const promoVal=parseFloat(edits.promo)||0;
+                      const effectivePrice = promoVal>0 ? promoVal : p.price; // prix promo si renseigné, sinon prix de base
+                      const isPromo = promoVal>0 && promoVal<p.price;
                       const newSt=p.stock-sellQ+restQ;
                       const newLow=newSt<=p.minStock;
                       const setE=(field,val)=>setTableEdits(e=>({...e,[p.id]:{...(e[p.id]||{}),[field]:val}}));
                       return(
-                        <tr key={p.id} style={{borderBottom:"1px solid #1e1e3530",background:isLow?"rgba(239,68,68,.04)":i%2?"rgba(255,255,255,.01)":"transparent"}}>
+                        <tr key={p.id} style={{borderBottom:"1px solid #1e1e3530",background:isLow?"rgba(239,68,68,.04)":isPromo?"rgba(245,158,11,.03)":i%2?"rgba(255,255,255,.01)":"transparent"}}>
                           <td style={{padding:"11px 14px"}}>
                             <div style={{display:"flex",alignItems:"center",gap:8}}>
                               <div style={{width:32,height:32,borderRadius:8,background:`${cat.color}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{cat.icon}</div>
                               <span style={{fontWeight:600,fontSize:14}}>{p.name}</span>
                               {isLow&&<span style={{fontSize:10,background:"rgba(239,68,68,.15)",color:"#ef4444",borderRadius:4,padding:"2px 6px",fontWeight:700}}>ALERTE</span>}
+                              {isPromo&&<span style={{fontSize:10,background:"rgba(245,158,11,.15)",color:"#f59e0b",borderRadius:4,padding:"2px 6px",fontWeight:700}}>PROMO</span>}
                             </div>
                           </td>
                           <td style={{padding:"11px 14px"}}><span className="pill" style={{background:`${cat.color}18`,color:cat.color}}>{cat.name}</span></td>
-                          <td style={{padding:"11px 14px",fontWeight:600,color:"#818cf8",whiteSpace:"nowrap"}}>{fmtEur(p.price)}</td>
+                          <td style={{padding:"11px 14px",whiteSpace:"nowrap"}}>
+                            <span style={{fontWeight:600,color:isPromo?"#475569":"#818cf8",textDecoration:isPromo?"line-through":"none",fontSize:isPromo?12:14}}>{fmtEur(p.price)}</span>
+                            {isPromo&&<span style={{fontWeight:700,color:"#f59e0b",fontSize:14,marginLeft:6}}>{fmtEur(effectivePrice)}</span>}
+                          </td>
                           <td style={{padding:"11px 14px"}}>
                             <span style={{fontWeight:800,fontSize:18,color:isLow?"#ef4444":"#e2e8f0"}}>{p.stock}</span>
                             <span style={{fontSize:11,color:"#475569",marginLeft:4}}>{p.unit}s</span>
@@ -553,8 +563,18 @@ export default function App() {
                                 style={{borderColor:sellQ>0?"#818cf8":"#2d2d45",color:sellQ>0?"#818cf8":"#e2e8f0",fontWeight:sellQ>0?700:400}}
                                 onChange={ev=>setE("sell",ev.target.value)}/>
                               <button className="sm-btn" onClick={()=>setE("sell",Math.min(p.stock,sellQ+1))}>+</button>
-                              {sellQ>0&&<span style={{fontSize:11,color:"#818cf8",fontWeight:700,whiteSpace:"nowrap",marginLeft:2}}>{fmtEur(p.price*sellQ)}</span>}
+                              {sellQ>0&&<span style={{fontSize:11,color:isPromo?"#f59e0b":"#818cf8",fontWeight:700,whiteSpace:"nowrap",marginLeft:2}}>{fmtEur(effectivePrice*sellQ)}</span>}
                             </div>
+                          </td>
+                          {/* Prix promo */}
+                          <td style={{padding:"8px 14px"}}>
+                            <div style={{display:"flex",alignItems:"center",gap:4}}>
+                              <input className="tbl-in" type="number" min="0" step="0.01" value={edits.promo||""} placeholder="—"
+                                style={{width:70,borderColor:isPromo?"#f59e0b":"#2d2d45",color:isPromo?"#f59e0b":"#475569",fontWeight:isPromo?700:400}}
+                                onChange={ev=>setE("promo",ev.target.value)}/>
+                              {isPromo&&<button onClick={()=>setE("promo","")} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>}
+                            </div>
+                            {isPromo&&<div style={{fontSize:10,color:"#f59e0b",marginTop:3}}>−{Math.round((1-promoVal/p.price)*100)}%</div>}
                           </td>
                           {/* Réappro */}
                           <td style={{padding:"8px 14px"}}>
@@ -581,8 +601,16 @@ export default function App() {
                 {Object.values(tableEdits).some(e=>(parseInt(e.sell)||0)>0||(parseInt(e.restock)||0)>0)&&(
                   <div style={{padding:"14px 20px",borderTop:"1px solid #1e1e35",background:"#0f0f1a",display:"flex",gap:24,flexWrap:"wrap"}}>
                     <span style={{color:"#818cf8",fontWeight:700,fontSize:13}}>
-                      💳 {Object.values(tableEdits).reduce((s,e)=>s+(parseInt(e.sell)||0),0)} vendus · CA : {fmtEur(products.reduce((s,p)=>s+(parseInt(tableEdits[p.id]?.sell)||0)*p.price,0))}
+                      💳 {Object.values(tableEdits).reduce((s,e)=>s+(parseInt(e.sell)||0),0)} vendus · CA : {fmtEur(products.reduce((s,p)=>{
+                        const e=tableEdits[p.id]||{};
+                        const q=parseInt(e.sell)||0;
+                        const promo=parseFloat(e.promo)||0;
+                        return s+q*(promo>0?promo:p.price);
+                      },0))}
                     </span>
+                    {products.some(p=>{const e=tableEdits[p.id]||{};return (parseFloat(e.promo)||0)>0&&(parseInt(e.sell)||0)>0;})&&(
+                      <span style={{color:"#f59e0b",fontWeight:700,fontSize:13}}>🏷️ Promos appliquées</span>
+                    )}
                     <span style={{color:"#4ade80",fontWeight:700,fontSize:13}}>
                       📦 {Object.values(tableEdits).reduce((s,e)=>s+(parseInt(e.restock)||0),0)} unités réapprovisionnées
                     </span>
@@ -742,7 +770,10 @@ export default function App() {
                                   {[...items].sort((a,b)=>b.date.localeCompare(a.date)).map((s,i)=>(
                                     <tr key={s.id} style={{borderBottom:"1px solid #1e1e3520",background:i%2?"rgba(255,255,255,.01)":"transparent"}}>
                                       <td style={{padding:"11px 18px",fontSize:12,color:"#475569",whiteSpace:"nowrap"}}>{new Date(s.date).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</td>
-                                      <td style={{padding:"11px 18px",fontWeight:600,fontSize:13}}>{s.productName}</td>
+                                      <td style={{padding:"11px 18px",fontWeight:600,fontSize:13}}>
+                                        {s.productName}
+                                        {s.promo&&<span style={{marginLeft:6,fontSize:10,background:"rgba(245,158,11,.15)",color:"#f59e0b",borderRadius:4,padding:"1px 5px",fontWeight:700}}>PROMO</span>}
+                                      </td>
                                       <td style={{padding:"11px 18px",color:"#38bdf8",fontWeight:600}}>×{s.qty}</td>
                                       {histTab==="ventes"&&<td style={{padding:"11px 18px",color:"#4ade80",fontWeight:700}}>{fmtEur(s.amount)}</td>}
                                       <td style={{padding:"11px 18px"}}><span style={{background:"#1e1e35",borderRadius:6,padding:"2px 8px",fontSize:11,color:"#818cf8",fontWeight:600}}>{s.by||"—"}</span></td>
