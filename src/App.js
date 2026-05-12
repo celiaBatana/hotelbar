@@ -43,7 +43,8 @@ export default function App() {
 
   const [sellModal,    setSellModal]   = useState(null);
   const [sellQty,      setSellQty]     = useState(1);
-  const [sellDate,     setSellDate]    = useState(""); // date custom pour modal vente
+  const [sellDate,     setSellDate]    = useState("");
+  const [sellPromo,    setSellPromo]   = useState(""); // prix promo modal vente
   const [tableDate,    setTableDate]   = useState(""); // date custom pour tableau
   const [editSaleModal,setEditSaleModal]=useState(null); // édition d'une vente existante
   const [addModal,     setAddModal]    = useState(false);
@@ -86,12 +87,14 @@ export default function App() {
     const upP = latest.map(x=>x.id===p.id?{...x,stock:x.stock-sellQty,sold:x.sold+sellQty}:x);
     const latS = await dbGet("sales")||sales;
     const saleDate = sellDate ? new Date(sellDate).toISOString() : new Date().toISOString();
-    const ns = {id:Date.now(),productId:p.id,productName:p.name,qty:sellQty,amount:p.price*sellQty,date:saleDate,by:myId.current};
+    const promoPrice = sellPromo&&+sellPromo>0&&+sellPromo<p.price ? +sellPromo : null;
+    const unitPrice = promoPrice || p.price;
+    const ns = {id:Date.now(),productId:p.id,productName:p.name,qty:sellQty,amount:unitPrice*sellQty,promo:promoPrice,date:saleDate,by:myId.current};
     await Promise.all([saveP(upP),saveS([...latS,ns])]);
     const rem=p.stock-sellQty;
     if (rem<=p.minStock) toast$(`⚠️ Stock bas : ${p.name} (${rem} restants)`,"warn");
-    else toast$(`✓ ${sellQty}× ${p.name}`);
-    setSellModal(null); setSellQty(1); setSellDate("");
+    else toast$(`✓ ${sellQty}× ${p.name}${promoPrice?` — promo ${fmtEur(promoPrice)}`:"" }`);
+    setSellModal(null); setSellQty(1); setSellDate(""); setSellPromo("");
   };
 
   const handleAdd = async () => {
@@ -932,7 +935,7 @@ export default function App() {
 
       {/* ════ MODALS ════ */}
       {sellModal&&(
-        <div className="modal-bg" onClick={()=>{setSellModal(null);setSellDate("");}}>
+        <div className="modal-bg" onClick={()=>{setSellModal(null);setSellDate("");setSellPromo("");}}>
           <div className="card m-in" style={{padding:32,width:400,maxWidth:"100%"}} onClick={e=>e.stopPropagation()}>
             {(()=>{const cat=getCat(sellModal.categoryId);return(<>
               <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:24}}>
@@ -945,18 +948,35 @@ export default function App() {
                 <input className="input" type="number" min="1" max={sellModal.stock} value={sellQty} onChange={e=>setSellQty(+e.target.value)} style={{textAlign:"center",fontSize:22,fontWeight:800}}/>
                 <button className="btn" style={{background:"#1e1e35",color:"#e2e8f0",width:44,height:44,fontSize:22,border:"1px solid #2d2d45"}} onClick={()=>setSellQty(q=>Math.min(sellModal.stock,q+1))}>+</button>
               </div>
-              {/* Date personnalisée */}
+              {/* Prix promo */}
+              <div style={{marginBottom:16}}>
+                <label style={{fontSize:11,color:"#475569",display:"block",marginBottom:6,fontWeight:700,letterSpacing:.8}}>
+                  PRIX PROMO <span style={{color:"#334155",fontWeight:400}}>(optionnel — prix de base si vide)</span>
+                </label>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <input className="input no-arrows" type="number" min="0" step="0.01" placeholder={`${sellModal.price} FCFA (prix de base)`}
+                    value={sellPromo} onChange={e=>setSellPromo(e.target.value)}
+                    style={{color:sellPromo&&+sellPromo>0&&+sellPromo<sellModal.price?"#f59e0b":"#e2e8f0",borderColor:sellPromo&&+sellPromo>0&&+sellPromo<sellModal.price?"#f59e0b":"#2d2d45"}}/>
+                  {sellPromo&&+sellPromo>0&&<button onClick={()=>setSellPromo("")} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:16,flexShrink:0}}>✕</button>}
+                </div>
+                {sellPromo&&+sellPromo>0&&+sellPromo<sellModal.price&&(
+                  <div style={{fontSize:12,color:"#f59e0b",marginTop:4}}>🏷️ Réduction de {Math.round((1-+sellPromo/sellModal.price)*100)}%</div>
+                )}
+              </div>
+              {/* Date */}
               <div style={{marginBottom:16}}>
                 <label style={{fontSize:11,color:"#475569",display:"block",marginBottom:6,fontWeight:700,letterSpacing:.8}}>DATE (optionnel — aujourd'hui par défaut)</label>
                 <input className="input" type="date" value={sellDate} onChange={e=>setSellDate(e.target.value)}
                   style={{color:sellDate?"#e2e8f0":"#475569"}}/>
               </div>
-              <div style={{background:"rgba(129,140,248,.08)",border:"1px solid rgba(129,140,248,.2)",borderRadius:12,padding:"14px 18px",marginBottom:22,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{background:"rgba(129,140,248,.08)",border:`1px solid ${sellPromo&&+sellPromo>0&&+sellPromo<sellModal.price?"rgba(245,158,11,.3)":"rgba(129,140,248,.2)"}`,borderRadius:12,padding:"14px 18px",marginBottom:22,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <span style={{color:"#64748b"}}>{sellDate?new Date(sellDate).toLocaleDateString("fr-FR",{weekday:"short",day:"numeric",month:"short"}):"Aujourd'hui"}</span>
-                <span style={{fontWeight:800,fontSize:24,color:"#818cf8"}}>{fmtEur(sellModal.price*sellQty)}</span>
+                <span style={{fontWeight:800,fontSize:24,color:sellPromo&&+sellPromo>0&&+sellPromo<sellModal.price?"#f59e0b":"#818cf8"}}>
+                  {fmtEur((sellPromo&&+sellPromo>0&&+sellPromo<sellModal.price?+sellPromo:sellModal.price)*sellQty)}
+                </span>
               </div>
               <div style={{display:"flex",gap:10}}>
-                <button className="btn" style={{flex:1,background:"#1e1e35",color:"#64748b",padding:13,border:"1px solid #2d2d45"}} onClick={()=>{setSellModal(null);setSellDate("");}}>Annuler</button>
+                <button className="btn" style={{flex:1,background:"#1e1e35",color:"#64748b",padding:13,border:"1px solid #2d2d45"}} onClick={()=>{setSellModal(null);setSellDate("");setSellPromo("");}}>Annuler</button>
                 <button className="btn" style={{flex:2,background:"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"#fff",padding:13,fontSize:15,boxShadow:"0 4px 20px rgba(99,102,241,.3)"}} onClick={handleSell}>✓ Confirmer</button>
               </div>
             </>);})()} 
