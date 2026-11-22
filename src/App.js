@@ -120,6 +120,27 @@ function Main({ me }) {
     setSellModal(null); setSellQty(1); setSellDate(""); setSellPromo("");
   };
 
+  // Export CSV (séparateur ; et BOM pour une ouverture directe dans Excel FR)
+  const exportCsv = (monthOnly) => {
+    const isV = histTab==="ventes";
+    const data = (isV?sales:reappros).filter(x=>!monthOnly||x.date.startsWith(histMonth)).sort((a,b)=>a.date.localeCompare(b.date));
+    if (!data.length) { toast$("Rien à exporter","err"); return; }
+    const esc = (v)=>`"${String(v??"").replace(/"/g,'""')}"`;
+    const num = (n)=>String(Math.round(n*100)/100).replace(".",",");
+    const head = isV ? ["Date","Heure","Article","Quantité","Prix unitaire","Montant","Promo","Vendeur"] : ["Date","Heure","Article","Quantité ajoutée","Opérateur"];
+    const rows = data.map(x=>{
+      const d=new Date(x.date);
+      const base=[d.toLocaleDateString("fr-FR"),d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}),x.productName,x.qty];
+      return isV ? [...base,num(x.amount/x.qty),num(x.amount),x.promo?"oui":"non",x.by||""] : [...base,x.by||""];
+    });
+    const csv = "\uFEFF"+[head,...rows].map(r=>r.map(esc).join(";")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+    const a = document.createElement("a");
+    a.href=url; a.download=`hotelbar_${isV?"ventes":"reappros"}_${monthOnly?histMonth:"tout"}.csv`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    toast$(`✓ ${data.length} ligne(s) exportée(s)`);
+  };
+
   const undoSale = async (sale) => {
     const latest = await dbGet("products")||products;
     const latS   = await dbGet("sales")||sales;
@@ -707,6 +728,10 @@ function Main({ me }) {
                     ))}
                   </div>
                   {/* Effacer */}
+                  {isAdmin&&(histTab==="ventes"?sales:reappros).length>0&&<>
+                    <button className="btn" style={{background:"#1e1e35",color:"#4ade80",border:"1px solid #2d2d45",padding:"8px 14px",fontSize:12}} onClick={()=>exportCsv(true)}>⬇ CSV du mois</button>
+                    <button className="btn" style={{background:"#1e1e35",color:"#4ade80",border:"1px solid #2d2d45",padding:"8px 14px",fontSize:12}} onClick={()=>exportCsv(false)}>⬇ CSV tout</button>
+                  </>}
                   {isAdmin&&(histTab==="ventes"?sales:reappros).length>0&&(
                     <button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"8px 14px",fontSize:12,marginLeft:4}}
                       onClick={async()=>{
