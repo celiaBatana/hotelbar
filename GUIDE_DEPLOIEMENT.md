@@ -61,29 +61,45 @@ git push -u origin main
 
 ---
 
-## ✅ Étape 5 — Sécuriser Firebase (important !)
+## ✅ Étape 5 — Comptes & sécurité Firebase (important !)
 
-Par défaut Firebase est en "mode test" (tout le monde peut lire/écrire).
-Pour restreindre l'accès à ton site uniquement :
+L'app a maintenant une connexion avec deux rôles : **Admin** (tout) et **Vendeur** (ventes uniquement).
 
-1. Va sur https://console.firebase.google.com → ton projet → **Firestore Database**
-2. Onglet **Rules** → remplace le contenu par :
+1. Console Firebase → **Authentication** → **Get started** → onglet **Sign-in method** → active **Email/Password**.
+2. Console Firebase → **Firestore Database** → onglet **Rules** → remplace tout par :
 
 ```
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if true;
+    function signedIn()   { return request.auth != null; }
+    function hasProfile() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function isAdmin()    { return hasProfile() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'; }
+
+    // Données du bar : tout le monde connecté lit ; le vendeur n'écrit que ventes + stocks (via vente)
+    match /hotelbar/{docId} {
+      allow read: if hasProfile();
+      allow write: if isAdmin() || (hasProfile() && docId in ['products', 'sales']);
+    }
+    // Utilisateurs : seul l'admin crée / modifie / supprime
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAdmin() || (signedIn() && request.auth.uid == userId
+                       && request.resource.data.role == 'admin'
+                       && !exists(/databases/$(database)/documents/meta/setup));
+      allow update, delete: if isAdmin();
+    }
+    // Marqueur "compte admin déjà créé"
+    match /meta/{docId} {
+      allow read: if true;
+      allow create: if signedIn() && docId == 'setup' && !exists(/databases/$(database)/documents/meta/setup);
     }
   }
 }
 ```
-
-(Pour l'instant c'est ouvert — suffisant pour un usage interne.
-Si tu veux ajouter des logins plus tard, dis-le moi !)
-
----
+3. Clique **Publish**.
+4. Ouvre le site → **« Première utilisation ? Créer le compte administrateur »** → crée ton compte (fais-le tout de suite, ce lien disparaît une fois le compte admin créé).
+5. Dans le site → **👥 Équipe** → **Ajouter une personne** (rôle Vendeur) et communique-lui email + mot de passe.
 
 ## ✅ Étape 6 — Partager l'URL
 

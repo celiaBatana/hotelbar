@@ -1,5 +1,7 @@
-import { useState, useEffect, useRef } from "react";
-import { dbGet, dbSet, dbListen } from "./firebase";
+import { useState, useEffect } from "react";
+import { dbGet, dbSet, dbListen, watchAuth, getProfile, logout, waitPending } from "./firebase";
+import CSS from "./styles";
+import { LoginScreen, UsersModal } from "./Auth";
 
 const INITIAL_CATEGORIES = [
   { id: "soft",   name: "Soft",   color: "#38bdf8", icon: "🥤" },
@@ -20,9 +22,10 @@ const ICON_LIST     = ["🥤","🍺","🥃","☕","🍷","🧃","🍾","🍹","�
 
 const fmtEur = (n) => Number(n).toLocaleString("fr-FR",{minimumFractionDigits:2,maximumFractionDigits:2}) + " FCFA";
 const today  = () => new Date().toDateString();
-const uid    = () => Math.random().toString(36).slice(2,6);
 
-export default function App() {
+function Main({ me }) {
+  const isAdmin = me.role === "admin";
+  const [usersModal, setUsersModal] = useState(false);
   const [products,   setProducts]   = useState(INITIAL_PRODUCTS);
   const [categories, setCategories] = useState(INITIAL_CATEGORIES);
   const [sales,      setSales]      = useState([]);
@@ -57,7 +60,6 @@ export default function App() {
   const [newCatColor,  setNewCatColor] = useState("#38bdf8");
   const [newP, setNewP] = useState({ name:"", categoryId:"soft", price:"", stock:"", minStock:"", unit:"bouteille" });
   const [toast, setToast] = useState(null);
-  const myId = useRef(`u_${uid()}`);
 
   const toast$ = (msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null),3000); };
 
@@ -89,7 +91,7 @@ export default function App() {
     const saleDate = sellDate ? new Date(sellDate).toISOString() : new Date().toISOString();
     const promoPrice = sellPromo&&+sellPromo>0&&+sellPromo<p.price ? +sellPromo : null;
     const unitPrice = promoPrice || p.price;
-    const ns = {id:Date.now(),productId:p.id,productName:p.name,qty:sellQty,amount:unitPrice*sellQty,promo:promoPrice,date:saleDate,by:myId.current};
+    const ns = {id:Date.now(),productId:p.id,productName:p.name,qty:sellQty,amount:unitPrice*sellQty,promo:promoPrice,date:saleDate,by:me.name||me.email};
     await Promise.all([saveP(upP),saveS([...latS,ns])]);
     const rem=p.stock-sellQty;
     if (rem<=p.minStock) toast$(`⚠️ Stock bas : ${p.name} (${rem} restants)`,"warn");
@@ -98,6 +100,7 @@ export default function App() {
   };
 
   const handleAdd = async () => {
+    if (!isAdmin) return;
     if (!newP.name||!newP.price||!newP.stock) { toast$("Champs manquants","err"); return; }
     const prod={...newP,id:Date.now(),price:+newP.price,stock:+newP.stock,minStock:+newP.minStock||10,sold:0};
     const latest=await dbGet("products")||products;
@@ -107,6 +110,7 @@ export default function App() {
   };
 
   const handleEdit = async () => {
+    if (!isAdmin) return;
     if (!editModal.name||!editModal.price||editModal.stock==="") { toast$("Champs manquants","err"); return; }
     const latest=await dbGet("products")||products;
     await saveP(latest.map(p=>p.id===editModal.id?{...editModal,price:+editModal.price,stock:+editModal.stock,minStock:+editModal.minStock}:p));
@@ -114,24 +118,27 @@ export default function App() {
   };
 
   const handleRestock = async () => {
+    if (!isAdmin) return;
     const latest=await dbGet("products")||products;
     const p=latest.find(x=>x.id===restockModal.id);
     await saveP(latest.map(x=>x.id===restockModal.id?{...x,stock:x.stock+ +restockQty}:x));
     // Sauvegarder dans l'historique réappros
     const latestReappros=await dbGet("reappros")||reappros;
-    const nr={id:Date.now(),productId:restockModal.id,productName:restockModal.name,qty:+restockQty,date:new Date().toISOString(),by:myId.current};
+    const nr={id:Date.now(),productId:restockModal.id,productName:restockModal.name,qty:+restockQty,date:new Date().toISOString(),by:me.name||me.email};
     setReappros([...latestReappros,nr]);
     await dbSet("reappros",[...latestReappros,nr]);
     toast$("Stock réapprovisionné !"); setRestockModal(null); setRestockQty(0);
   };
 
   const handleDelete = async (id) => {
+    if (!isAdmin) return;
     if (!window.confirm("Supprimer cet article ?")) return;
     const latest=await dbGet("products")||products;
     await saveP(latest.filter(p=>p.id!==id)); toast$("Supprimé","warn");
   };
 
   const handleAddCat = async () => {
+    if (!isAdmin) return;
     if (!newCatName.trim()) { toast$("Nom requis","err"); return; }
     const id=newCatName.toLowerCase().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"")+"_"+Date.now();
     await saveC([...categories,{id,name:newCatName.trim(),color:newCatColor,icon:newCatIcon}]);
@@ -139,12 +146,14 @@ export default function App() {
   };
 
   const handleDeleteCat = async (id) => {
+    if (!isAdmin) return;
     if (products.some(p=>p.categoryId===id)) { toast$("Des articles utilisent cette catégorie !","err"); return; }
     if (!window.confirm("Supprimer cette catégorie ?")) return;
     await saveC(categories.filter(c=>c.id!==id)); toast$("Catégorie supprimée","warn");
   };
 
   const handleEditSale = async () => {
+    if (!isAdmin) return;
     if (!editSaleModal) return;
     const latS = await dbGet("sales")||sales;
     const updated = latS.map(s=>s.id===editSaleModal.id
@@ -155,7 +164,7 @@ export default function App() {
   };
 
   const handleTableValidate = async () => {
-    const hasChanges=Object.values(tableEdits).some(e=>(parseInt(e.sell)||0)>0||(parseInt(e.restock)||0)>0);
+    const hasChanges=Object.values(tableEdits).some(e=>(parseInt(e.sell)||0)>0||(isAdmin&&(parseInt(e.restock)||0)>0));
     if (!hasChanges) { toast$("Aucune modification à enregistrer","err"); return; }
     setTableSaving(true);
     const latest=await dbGet("products")||products;
@@ -167,16 +176,16 @@ export default function App() {
     const updatedProds=latest.map(p=>{
       const edits=tableEdits[p.id]||{};
       const sellQ=parseInt(edits.sell)||0;
-      const restQ=parseInt(edits.restock)||0;
+      const restQ=isAdmin?(parseInt(edits.restock)||0):0;
       if (sellQ>p.stock) return p;
       if (sellQ>0) newSales.push({id:Date.now()+p.id,productId:p.id,productName:p.name,qty:sellQ,
         amount:(parseFloat(edits.promo)>0?parseFloat(edits.promo):p.price)*sellQ,
         promo:parseFloat(edits.promo)>0?parseFloat(edits.promo):null,
-        date:useDate,by:myId.current});
-      if (restQ>0) newReappros.push({id:Date.now()+p.id+1,productId:p.id,productName:p.name,qty:restQ,date:useDate,by:myId.current});
+        date:useDate,by:me.name||me.email});
+      if (restQ>0) newReappros.push({id:Date.now()+p.id+1,productId:p.id,productName:p.name,qty:restQ,date:useDate,by:me.name||me.email});
       return {...p,stock:p.stock-sellQ+restQ,sold:p.sold+sellQ};
     });
-    await Promise.all([saveP(updatedProds),saveS([...latestSales,...newSales]),dbSet("reappros",[...latestReappros,...newReappros])]);
+    await Promise.all([saveP(updatedProds),saveS([...latestSales,...newSales]),...(newReappros.length?[dbSet("reappros",[...latestReappros,...newReappros])]:[])]);
     setTableEdits({}); setTableSaving(false);
     toast$(`✓ ${newSales.length} vente(s) et ${newReappros.length} réappro(s) — ${tableDate?new Date(tableDate).toLocaleDateString("fr-FR"):"aujourd'hui"}`);
   };
@@ -231,68 +240,50 @@ export default function App() {
 
   return (
     <div style={{background:"#0f0f17",minHeight:"100vh",fontFamily:"'Plus Jakarta Sans',sans-serif",color:"#e2e8f0"}}>
-      <style>{`
-        *{box-sizing:border-box;margin:0;padding:0}
-        ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#0f0f17}::-webkit-scrollbar-thumb{background:#2d2d45;border-radius:4px}
-        .btn{cursor:pointer;border:none;font-family:inherit;font-weight:600;border-radius:10px;transition:all .18s;display:inline-flex;align-items:center;justify-content:center;gap:6px}
-        .btn:hover{filter:brightness(1.12);transform:translateY(-1px)}.btn:active{transform:translateY(0);filter:brightness(.95)}
-        .input{background:#1a1a2e;border:1.5px solid #2d2d45;border-radius:10px;color:#e2e8f0;font-family:inherit;padding:11px 14px;width:100%;outline:none;font-size:14px;transition:border .15s}
-        .input:focus{border-color:#818cf8}select.input option{background:#1a1a2e}
-        .card{background:#16162a;border:1px solid #1e1e35;border-radius:16px}
-        .pill{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.4px}
-        .sb-btn{cursor:pointer;background:none;border:none;font-family:inherit;width:100%;text-align:left;padding:11px 16px;border-radius:12px;font-size:14px;font-weight:600;color:#64748b;transition:all .15s;display:flex;align-items:center;gap:10px}
-        .sb-btn:hover{background:#1e1e35;color:#e2e8f0}.sb-btn.active{background:linear-gradient(135deg,#312e81,#4c1d95);color:#fff;box-shadow:0 4px 20px rgba(99,102,241,.25)}
-        @keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}.fade-up{animation:fadeUp .3s ease}
-        @keyframes mIn{from{opacity:0;transform:scale(.95) translateY(8px)}to{opacity:1;transform:scale(1) translateY(0)}}.m-in{animation:mIn .22s ease}
-        .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.65);backdrop-filter:blur(8px);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px}
-        @keyframes tIn{from{opacity:0;transform:translateX(60px)}to{opacity:1;transform:translateX(0)}}
-        .toast{animation:tIn .25s ease;position:fixed;bottom:28px;right:28px;z-index:999;padding:13px 20px;border-radius:12px;font-weight:600;font-size:14px;max-width:300px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:flex;align-items:center;gap:8px}
-        .prog-track{height:5px;border-radius:3px;background:#1e1e35;overflow:hidden}.prog-fill{height:100%;border-radius:3px;transition:width .5s ease}
-        .prod-card{background:#16162a;border:1.5px solid #1e1e35;border-radius:16px;padding:20px;transition:all .2s;position:relative;overflow:hidden}
-        .prod-card:hover{border-color:#312e81;transform:translateY(-2px);box-shadow:0 8px 32px rgba(0,0,0,.4)}
-        .tab{cursor:pointer;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;border:none;font-family:inherit;transition:all .15s}
-        .stat{background:#16162a;border:1px solid #1e1e35;border-radius:18px;padding:22px;transition:border-color .2s}.stat:hover{border-color:#312e81}
-        .icon-btn{cursor:pointer;border:none;background:none;font-size:15px;padding:6px 8px;border-radius:8px;transition:background .15s;color:#64748b}.icon-btn:hover{background:#1e1e35;color:#e2e8f0}
-        .tbl-in{background:#1a1a2e;border:1.5px solid #2d2d45;border-radius:8px;color:#e2e8f0;font-family:inherit;padding:6px 4px;text-align:center;font-size:14px;outline:none;width:58px;transition:border .15s}
-        .tbl-in:focus{border-color:#818cf8}
-        .no-arrows::-webkit-outer-spin-button,.no-arrows::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-        .no-arrows{-moz-appearance:textfield}
-        .sm-btn{cursor:pointer;border:1px solid #2d2d45;background:#1e1e35;color:#e2e8f0;border-radius:6px;width:26px;height:26px;font-size:14px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
-        .sm-btn:hover{background:#2d2d45}
-      `}</style>
+      <style>{CSS}</style>
 
       {toast&&<div className="toast" style={{background:toast.type==="err"?"#ef4444":toast.type==="warn"?"#f59e0b":"#22c55e",color:"#fff"}}><span>{toast.type==="err"?"✕":toast.type==="warn"?"⚠":"✓"}</span>{toast.msg}</div>}
 
-      <div style={{display:"flex",minHeight:"100vh"}}>
+      <div className="app-shell" style={{display:"flex",minHeight:"100vh"}}>
         {/* ── Sidebar ── */}
-        <aside style={{width:224,background:"#0d0d1a",borderRight:"1px solid #1e1e35",padding:"24px 12px",display:"flex",flexDirection:"column",gap:4,position:"sticky",top:0,height:"100vh",flexShrink:0}}>
-          <div style={{display:"flex",alignItems:"center",gap:12,padding:"4px 8px 24px"}}>
+        <aside className="sidebar" style={{width:224,background:"#0d0d1a",borderRight:"1px solid #1e1e35",padding:"24px 12px",display:"flex",flexDirection:"column",gap:4,position:"sticky",top:0,height:"100vh",flexShrink:0}}>
+          <div className="sb-hide-m" style={{display:"flex",alignItems:"center",gap:12,padding:"4px 8px 24px"}}>
             <div style={{width:38,height:38,borderRadius:12,background:"linear-gradient(135deg,#4f46e5,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>🏨</div>
             <div><div style={{fontWeight:800,fontSize:15,letterSpacing:"-.3px"}}>HôtelBar</div><div style={{fontSize:10,color:"#334155",letterSpacing:1}}>PRO</div></div>
           </div>
-          {[["dashboard","📊","Dashboard"],["stock","📦","Stocks"],["tableau","📋","Tableau"],["ventes","📜","Historique"],["top","🏆","Classement"]].map(([v,ic,lb])=>(
+          {[["dashboard","📊","Dashboard"],["stock","📦",isAdmin?"Stocks":"Vendre"],["tableau","📋","Tableau"],["ventes","📜","Historique"],["top","🏆","Classement"]].map(([v,ic,lb])=>(
             <button key={v} className={`sb-btn${view===v?" active":""}`} onClick={()=>setView(v)}>
-              <span style={{fontSize:16}}>{ic}</span>{lb}
-              {v==="stock"&&lowStock.length>0&&<span style={{marginLeft:"auto",background:"#ef4444",color:"#fff",borderRadius:20,padding:"1px 8px",fontSize:11,fontWeight:800}}>{lowStock.length}</span>}
+              <span className="sb-ic" style={{fontSize:16}}>{ic}</span>{lb}
+              {v==="stock"&&isAdmin&&lowStock.length>0&&<span style={{marginLeft:"auto",background:"#ef4444",color:"#fff",borderRadius:20,padding:"1px 8px",fontSize:11,fontWeight:800}}>{lowStock.length}</span>}
               {v==="tableau"&&Object.values(tableEdits).some(e=>(parseInt(e.sell)||0)>0||(parseInt(e.restock)||0)>0)&&<span style={{marginLeft:"auto",background:"#818cf8",color:"#fff",borderRadius:20,padding:"1px 8px",fontSize:11,fontWeight:800}}>●</span>}
             </button>
           ))}
-          <div style={{height:1,background:"#1e1e35",margin:"12px 8px"}}/>
-          <button className="sb-btn" onClick={()=>setCatModal(true)}><span style={{fontSize:16}}>🏷️</span>Catégories</button>
-          <div style={{flex:1}}/>
-          <div style={{padding:"10px 8px",borderTop:"1px solid #1e1e35"}}>
-            <div style={{fontSize:11,color:"#334155",marginBottom:4}}>🔥 Firebase · Temps réel</div>
-            <div style={{fontSize:11,color:"#475569"}}>{new Date().toLocaleDateString("fr-FR")}</div>
+          {isAdmin&&<>
+            <div className="sb-hide-m" style={{height:1,background:"#1e1e35",margin:"12px 8px"}}/>
+            <button className="sb-btn" onClick={()=>setCatModal(true)}><span className="sb-ic" style={{fontSize:16}}>🏷️</span>Catégories</button>
+            <button className="sb-btn" onClick={()=>setUsersModal(true)}><span className="sb-ic" style={{fontSize:16}}>👥</span>Équipe</button>
+          </>}
+          <div className="sb-hide-m" style={{flex:1}}/>
+          <div className="sb-user sb-hide-m">
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+              <div style={{width:30,height:30,borderRadius:10,background:"#1e1e35",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:13,color:"#818cf8",flexShrink:0}}>{(me.name||me.email||"?").charAt(0).toUpperCase()}</div>
+              <div style={{minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{me.name||me.email}</div>
+                <span className="role-pill" style={{background:isAdmin?"rgba(129,140,248,.15)":"rgba(251,191,36,.15)",color:isAdmin?"#818cf8":"#fbbf24"}}>{isAdmin?"ADMIN":"VENDEUR"}</span>
+              </div>
+            </div>
+            <button className="btn" onClick={logout} style={{width:"100%",background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",padding:"8px 0",fontSize:12}}>↩ Déconnexion</button>
           </div>
+          <button className="sb-btn only-m" onClick={logout}><span className="sb-ic" style={{fontSize:16}}>↩</span>Sortir</button>
         </aside>
 
-        <main style={{flex:1,padding:"32px 36px",overflowY:"auto",minWidth:0}}>
+        <main className="main-area" style={{flex:1,padding:"32px 36px",overflowY:"auto",minWidth:0}}>
 
           {/* ══ DASHBOARD ══ */}
           {view==="dashboard"&&(
             <div className="fade-up">
               {/* Header + sélecteur de mois */}
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24,flexWrap:"wrap",gap:12}}>
                 <div>
                   <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Dashboard</h1>
                   <p style={{color:"#475569",fontSize:14}}>{new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</p>
@@ -312,7 +303,7 @@ export default function App() {
               </div>
 
               {/* KPIs du mois */}
-              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:18,marginBottom:26}}>
+              <div className="kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:18,marginBottom:26}}>
                 {[
                   {label:"CA du mois",   val:fmtEur(monthCA),     sub: caEvol!==null?`${caEvol>=0?"▲":"▼"} ${Math.abs(caEvol)}% vs mois préc.`:`${monthSales.length} ventes`,  color:"#4ade80", icon:"💰"},
                   {label:"Nb ventes",    val:monthSales.length,   sub:`${[...new Set(monthSales.map(s=>s.date.slice(0,10)))].length} jours actifs`,                             color:"#818cf8", icon:"🧾"},
@@ -354,7 +345,7 @@ export default function App() {
                 </div>
               )}
 
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18,marginBottom:22}}>
+              <div className="two-col" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18,marginBottom:22}}>
                 {/* Top ventes du mois */}
                 <div className="card" style={{padding:20}}>
                   <h2 style={{fontWeight:700,fontSize:14,marginBottom:16}}>🏆 Top ventes — {monthLabel}</h2>
@@ -421,8 +412,8 @@ export default function App() {
                       <div key={p.id} style={{background:"rgba(239,68,68,.08)",border:"1px solid rgba(239,68,68,.25)",borderRadius:12,padding:"10px 16px",display:"flex",alignItems:"center",gap:12}}>
                         <span style={{fontSize:20}}>{cat.icon}</span>
                         <div><div style={{fontWeight:700,fontSize:14}}>{p.name}</div><div style={{fontSize:12,color:"#ef4444"}}>{p.stock} / min {p.minStock}</div></div>
-                        <button className="btn" style={{background:"#ef4444",color:"#fff",padding:"6px 14px",fontSize:12}}
-                          onClick={()=>{setRestockModal(p);setRestockQty(p.minStock*2);setView("stock")}}>Réappro</button>
+                        {isAdmin&&<button className="btn" style={{background:"#ef4444",color:"#fff",padding:"6px 14px",fontSize:12}}
+                          onClick={()=>{setRestockModal(p);setRestockQty(p.minStock*2);setView("stock")}}>Réappro</button>}
                       </div>
                     );})}
                   </div>
@@ -434,12 +425,12 @@ export default function App() {
           {/* ══ STOCKS ══ */}
           {view==="stock"&&(
             <div className="fade-up">
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:26}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:26,flexWrap:"wrap",gap:12}}>
                 <div>
-                  <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Stocks</h1>
+                  <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>{isAdmin?"Stocks":"Vendre"}</h1>
                   <p style={{color:"#475569",fontSize:14}}>{products.length} articles · {lowStock.length} alerte(s)</p>
                 </div>
-                <button className="btn" style={{background:"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"#fff",padding:"11px 22px",fontSize:14,boxShadow:"0 4px 20px rgba(99,102,241,.3)"}} onClick={()=>setAddModal(true)}>+ Nouvel article</button>
+                {isAdmin&&<button className="btn" style={{background:"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"#fff",padding:"11px 22px",fontSize:14,boxShadow:"0 4px 20px rgba(99,102,241,.3)"}} onClick={()=>setAddModal(true)}>+ Nouvel article</button>}
               </div>
               <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
                 <div style={{position:"relative",flexShrink:0}}>
@@ -483,9 +474,9 @@ export default function App() {
                       </div>
                       <div style={{display:"flex",gap:6}}>
                         <button className="btn" style={{flex:1,background:`${cat.color}18`,color:cat.color,border:`1px solid ${cat.color}30`,padding:"9px 0",fontSize:13}} onClick={()=>{setSellModal(p);setSellQty(1)}}>💳 Vendre</button>
-                        <button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",padding:"9px 12px",fontSize:13}} title="Réapprovisionner" onClick={()=>{setRestockModal(p);setRestockQty(p.minStock*2)}}>📦</button>
+                        {isAdmin&&<><button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",padding:"9px 12px",fontSize:13}} title="Réapprovisionner" onClick={()=>{setRestockModal(p);setRestockQty(p.minStock*2)}}>📦</button>
                         <button className="btn" style={{background:"#1e1e35",color:"#818cf8",border:"1px solid #2d2d45",padding:"9px 12px",fontSize:13}} title="Modifier" onClick={()=>setEditModal({...p,price:p.price.toString(),stock:p.stock.toString(),minStock:p.minStock.toString()})}>✏️</button>
-                        <button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"9px 12px",fontSize:13}} title="Supprimer" onClick={()=>handleDelete(p.id)}>🗑</button>
+                        <button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"9px 12px",fontSize:13}} title="Supprimer" onClick={()=>handleDelete(p.id)}>🗑</button></>}
                       </div>
                     </div>
                   );
@@ -497,12 +488,12 @@ export default function App() {
           {/* ══ TABLEAU ══ */}
           {view==="tableau"&&(
             <div className="fade-up">
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:26}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:26,flexWrap:"wrap",gap:12}}>
                 <div>
                   <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Tableau de gestion</h1>
-                  <p style={{color:"#475569",fontSize:14}}>Saisie rapide — ventes et réappros en une seule fois</p>
+                  <p style={{color:"#475569",fontSize:14}}>{isAdmin?"Saisie rapide — ventes et réappros en une seule fois":"Saisie rapide — enregistre toutes les ventes en une seule fois"}</p>
                 </div>
-                <div style={{display:"flex",gap:10}}>
+                <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
                   {/* Sélecteur de date pour le tableau */}
                   <div style={{display:"flex",alignItems:"center",gap:8,background:"#16162a",border:"1px solid #2d2d45",borderRadius:10,padding:"8px 14px"}}>
                     <span style={{fontSize:13,color:"#475569",whiteSpace:"nowrap"}}>📅 Date :</span>
@@ -522,7 +513,7 @@ export default function App() {
                 <table style={{width:"100%",borderCollapse:"collapse",minWidth:820}}>
                   <thead>
                     <tr style={{borderBottom:"2px solid #1e1e35",background:"#0f0f1a"}}>
-                      {["Article","Catégorie","Prix / u","Stock","Min","Ventes","Prix promo","Réappro","Nouveau stock"].map(h=>(
+                      {["Article","Catégorie","Prix / u","Stock","Min","Ventes","Prix promo",...(isAdmin?["Réappro"]:[]),"Nouveau stock"].map(h=>(
                         <th key={h} style={{padding:"13px 14px",textAlign:"left",fontSize:11,color:h==="Prix promo"?"#f59e0b":"#475569",fontWeight:700,letterSpacing:.6,whiteSpace:"nowrap"}}>{h.toUpperCase()}</th>
                       ))}
                     </tr>
@@ -533,7 +524,7 @@ export default function App() {
                       const isLow=p.stock<=p.minStock;
                       const edits=tableEdits[p.id]||{};
                       const sellQ=parseInt(edits.sell)||0;
-                      const restQ=parseInt(edits.restock)||0;
+                      const restQ=isAdmin?(parseInt(edits.restock)||0):0;
                       const promoVal=parseFloat(edits.promo)||0;
                       const effectivePrice = promoVal>0 ? promoVal : p.price; // prix promo si renseigné, sinon prix de base
                       const isPromo = promoVal>0 && promoVal<p.price;
@@ -582,7 +573,7 @@ export default function App() {
                             {isPromo&&<div style={{fontSize:10,color:"#f59e0b",marginTop:3}}>−{Math.round((1-promoVal/p.price)*100)}%</div>}
                           </td>
                           {/* Réappro */}
-                          <td style={{padding:"8px 14px"}}>
+                          {isAdmin&&<td style={{padding:"8px 14px"}}>
                             <div style={{display:"flex",alignItems:"center",gap:4}}>
                               <button className="sm-btn" onClick={()=>setE("restock",Math.max(0,restQ-1))}>−</button>
                               <input className="tbl-in" type="number" min="0" value={edits.restock||""} placeholder="0"
@@ -591,7 +582,7 @@ export default function App() {
                               <button className="sm-btn" onClick={()=>setE("restock",restQ+1)}>+</button>
                               {restQ>0&&<span style={{fontSize:11,color:"#4ade80",fontWeight:700,marginLeft:2}}>+{restQ}</span>}
                             </div>
-                          </td>
+                          </td>}
                           {/* Nouveau stock */}
                           <td style={{padding:"11px 14px"}}>
                             <span style={{fontWeight:800,fontSize:16,color:newLow?"#ef4444":(sellQ>0||restQ>0)?"#4ade80":"#334155"}}>{newSt}</span>
@@ -616,9 +607,9 @@ export default function App() {
                     {products.some(p=>{const e=tableEdits[p.id]||{};return (parseFloat(e.promo)||0)>0&&(parseInt(e.sell)||0)>0;})&&(
                       <span style={{color:"#f59e0b",fontWeight:700,fontSize:13}}>🏷️ Promos appliquées</span>
                     )}
-                    <span style={{color:"#4ade80",fontWeight:700,fontSize:13}}>
+                    {isAdmin&&<span style={{color:"#4ade80",fontWeight:700,fontSize:13}}>
                       📦 {Object.values(tableEdits).reduce((s,e)=>s+(parseInt(e.restock)||0),0)} unités réapprovisionnées
-                    </span>
+                    </span>}
                   </div>
                 )}
               </div>
@@ -629,12 +620,12 @@ export default function App() {
           {view==="ventes"&&(
             <div className="fade-up">
               {/* Header */}
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24,flexWrap:"wrap",gap:12}}>
                 <div>
                   <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Historique</h1>
                   <p style={{color:"#475569",fontSize:14}}>{sales.length} vente(s) · {reappros.length} réappro(s)</p>
                 </div>
-                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                   {/* Sélecteur mois */}
                   <button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",width:32,height:32,fontSize:16,padding:0}}
                     onClick={()=>{ const [y,m]=histMonth.split("-");const d=new Date(+y,+m-2,1);setHistMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); }}>‹</button>
@@ -653,7 +644,7 @@ export default function App() {
                     ))}
                   </div>
                   {/* Effacer */}
-                  {(histTab==="ventes"?sales:reappros).length>0&&(
+                  {isAdmin&&(histTab==="ventes"?sales:reappros).length>0&&(
                     <button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"8px 14px",fontSize:12,marginLeft:4}}
                       onClick={async()=>{
                         if (!window.confirm(`Effacer tout l'historique des ${histTab==="ventes"?"ventes":"réappros"} ?`)) return;
@@ -711,7 +702,7 @@ export default function App() {
                 return (
                   <div>
                     {/* Récap mensuel */}
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:20}}>
+                    <div className="three-col" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:20}}>
                       {(histTab==="ventes"?[
                         {label:"CA du mois",  val:fmtEur(monthTotal),        color:"#4ade80"},
                         {label:"Nb ventes",   val:monthData.length,          color:"#818cf8"},
@@ -766,7 +757,7 @@ export default function App() {
                                 <thead>
                                   <tr style={{borderBottom:"1px solid #1e1e35",background:"#0d0d1a"}}>
                                     {histTab==="ventes"
-                                      ?["Heure","Article","Qté","Montant","Opérateur",""].map(h=><th key={h} style={{padding:"10px 18px",textAlign:"left",fontSize:10,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>)
+                                      ?["Heure","Article","Qté","Montant","Opérateur",...(isAdmin?[""]:[])].map(h=><th key={h} style={{padding:"10px 18px",textAlign:"left",fontSize:10,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>)
                                       :["Heure","Article","Qté ajoutée","Opérateur"].map(h=><th key={h} style={{padding:"10px 18px",textAlign:"left",fontSize:10,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>)
                                     }
                                   </tr>
@@ -782,7 +773,7 @@ export default function App() {
                                       <td style={{padding:"11px 18px",color:"#38bdf8",fontWeight:600}}>×{s.qty}</td>
                                       {histTab==="ventes"&&<td style={{padding:"11px 18px",color:"#4ade80",fontWeight:700}}>{fmtEur(s.amount)}</td>}
                                       <td style={{padding:"11px 18px"}}><span style={{background:"#1e1e35",borderRadius:6,padding:"2px 8px",fontSize:11,color:"#818cf8",fontWeight:600}}>{s.by||"—"}</span></td>
-                                      {histTab==="ventes"&&<td style={{padding:"8px 18px"}}>
+                                      {histTab==="ventes"&&isAdmin&&<td style={{padding:"8px 18px"}}>
                                         <button className="btn" style={{background:"#1e1e35",color:"#818cf8",border:"1px solid #2d2d45",padding:"4px 10px",fontSize:11}}
                                           onClick={()=>setEditSaleModal({...s,date:s.date.slice(0,10),price:+(s.amount/s.qty).toFixed(2)})}>✏️ Modifier</button>
                                       </td>}
@@ -794,7 +785,7 @@ export default function App() {
                                     <tr style={{borderTop:"1px solid #1e1e35",background:"#0d0d1a"}}>
                                       <td colSpan={3} style={{padding:"10px 18px",fontSize:12,color:"#475569",fontWeight:600}}>Total du jour</td>
                                       <td style={{padding:"10px 18px",color:"#4ade80",fontWeight:800,fontSize:14}}>{fmtEur(dayTotal)}</td>
-                                      <td/><td/>
+                                      <td/>{isAdmin&&<td/>}
                                     </tr>
                                   </tfoot>
                                 )}
@@ -814,14 +805,14 @@ export default function App() {
           {view==="top"&&(
             <div className="fade-up">
               {/* Header */}
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24,flexWrap:"wrap",gap:12}}>
                 <div>
                   <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Classement</h1>
                   <p style={{color:"#475569",fontSize:14}}>
                     {topMode==="mois"?`${MOIS[(+topMonth.split("-")[1])-1]} ${topMonth.split("-")[0]}`:"Tous les temps"}
                   </p>
                 </div>
-                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                   {/* Toggle global/mois */}
                   <div style={{display:"flex",background:"#16162a",border:"1px solid #1e1e35",borderRadius:10,padding:3}}>
                     {[["mois","📅 Par mois"],["global","🌍 Global"]].map(([m,lb])=>(
@@ -1089,6 +1080,8 @@ export default function App() {
         </div>
       )}
 
+      {usersModal&&isAdmin&&<UsersModal me={me} onClose={()=>setUsersModal(false)} toast={toast$}/>}
+
       {/* Modal édition vente */}
       {editSaleModal&&(
         <div className="modal-bg" onClick={()=>setEditSaleModal(null)}>
@@ -1120,4 +1113,32 @@ export default function App() {
       )}
     </div>
   );
+}
+
+/* ───────────── Authentification : choisit l'écran selon l'utilisateur ───────────── */
+export default function App() {
+  const [state, setState] = useState({ status: "loading" }); // loading | out | in
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => watchAuth(async (u) => {
+    if (!u) { setState({ status: "out" }); return; }
+    await waitPending();
+    const profile = await getProfile(u.uid);
+    if (!profile) {
+      setNotice("Ton compte n'a pas (ou plus) d'accès. Contacte l'administrateur.");
+      await logout();
+      return;
+    }
+    setNotice("");
+    setState({ status: "in", me: { uid: u.uid, email: u.email, name: profile.name, role: profile.role === "admin" ? "admin" : "seller" } });
+  }), []);
+
+  if (state.status === "loading") return (
+    <div style={{background:"#0f0f17",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#818cf8",fontFamily:"'Plus Jakarta Sans',sans-serif",fontWeight:700}}>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <div style={{width:44,height:44,borderRadius:"50%",border:"3px solid #1e1e30",borderTopColor:"#818cf8",animation:"spin .9s linear infinite"}}/>
+    </div>
+  );
+  if (state.status === "out") return <LoginScreen notice={notice}/>;
+  return <Main key={state.me.uid} me={state.me}/>;
 }
