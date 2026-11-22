@@ -1,0 +1,185 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // Profil du joueur connecté (sert à borner ce qu'il peut publier au classement)
+    function me() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+
+    // Un joueur ne peut pas publier plus d'XP / de série que son propre profil
+    function publicStatsOk() {
+      let n = request.resource.data;
+      let u = me();
+      return n.get('totalXP', 0) <= u.get('totalXP', 0)
+        && n.get('level', 1) <= u.get('level', 1)
+        && n.get('streak', 0) <= u.get('streak', 0)
+        && (n.get('weekKey', '') != u.get('weekKey', 'x') || n.get('weekXP', 0) <= u.get('weekXP', 0));
+    }
+
+    // Garde-fous sur la progression (protection légère : empêche les modifications grossières
+    // faites depuis la console du navigateur, pas un script patient — voir option B si besoin)
+    function profileOk() {
+      let n = request.resource.data;
+      let o = resource.data;
+      let dXP = n.get('totalXP', 0) - o.get('totalXP', 0);
+      return dXP >= 0 && dXP <= 7000
+        && (dXP == 0 || (n.get('xpAt', null) == request.time
+              && request.time >= o.get('xpAt', timestamp.value(0)) + duration.value(8, 's')))
+        && n.get('streak', 0) <= o.get('streak', 0) + 1
+        && n.get('freezes', 0) <= 2
+        && n.get('weekXP', 0) <= (n.get('weekKey', '') == o.get('weekKey', '') ? o.get('weekXP', 0) : 0) + dXP
+        && n.get('goalXP', 0) <= (n.get('goalDate', '') == o.get('goalDate', '') ? o.get('goalXP', 0) : 0) + dXP;
+    }
+
+    // ── Quizly ────────────────────────────────────────────────
+    // Contenu : lecture libre, écriture réservée aux admins
+    match /questions/{id}  { allow read: if true; allow write: if isAdmin(); }
+    match /quizzes/{id}    { allow read: if true; allow write: if isAdmin(); }
+    match /categories/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /themes/{id}     { allow read: if true; allow write: if isAdmin(); }
+
+    // Profils : chacun son document, sans pouvoir se donner isAdmin/isPremium
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.isAdmin == false
+        && request.resource.data.isPremium == false
+        && request.resource.data.get('totalXP', 0) == 0;
+      allow update: if signedIn() && request.auth.uid == uid
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAdmin', 'isPremium'])
+        && profileOk();
+    }
+
+    // Classement public : chacun écrit uniquement sa propre ligne
+    match /leaderboard/{uid} {
+      allow read: if true;
+      allow create, update: if signedIn() && request.auth.uid == uid && publicStatsOk();
+    }
+
+    // Défi du jour : un score par joueur et par jour (id = date_uid), non modifiable
+    match /daily_scores/{id} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && id == request.resource.data.date + '_' + request.auth.uid
+        && request.resource.data.total <= 10
+        && request.resource.data.score >= 0
+        && request.resource.data.score <= request.resource.data.total
+        && request.resource.data.get('xp', 0) <= 500;
+    }
+
+    // Duels entre amis
+    // Amis : code personnel + demandes (lecture limitée aux deux personnes)
+    match /friend_codes/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+    }
+    match /friend_requests/{id} {
+      allow read: if signedIn() && (resource.data.fromUid == request.auth.uid || resource.data.toUid == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.toUid != request.auth.uid
+        && id == request.resource.data.fromUid + '_' + request.resource.data.toUid
+        && request.resource.data.status == 'pending';
+      allow update: if signedIn()
+        && resource.data.toUid == request.auth.uid
+        && resource.data.status == 'pending'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+        && request.resource.data.status == 'accepted';
+      allow delete: if signedIn() && (resource.data.fromUid == request.auth.uid || resource.data.toUid == request.auth.uid);
+    }
+
+    match /duels/{id} {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.creatorUid == request.auth.uid
+        && request.resource.data.questionIds.size() <= 20;
+      // Manche suivante : n'importe quel joueur connecté peut l'ajouter, une seule fois
+      allow update: if signedIn()
+        && !('nextId' in resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nextId'])
+        && request.resource.data.nextId is string;
+    }
+    match /duel_results/{id} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && id == request.resource.data.duelId + '_' + request.auth.uid
+        && request.resource.data.total <= 20
+        && request.resource.data.score >= 0
+        && request.resource.data.score <= request.resource.data.total;
+    }
+
+    // Groupes privés : lecture d'un groupe par son code (pas de liste), membres = leur propre ligne
+    match /groups/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.name.size() <= 40;
+      allow update, delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+    match /group_members/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && id == request.resource.data.code + '_' + request.auth.uid
+        && publicStatsOk();
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // Stats par question : lecture admin, incrément par tout joueur connecté
+    match /question_stats/{id} {
+      allow create: if signedIn()
+        && request.resource.data.plays == 1
+        && request.resource.data.correct >= 0 && request.resource.data.correct <= 1;
+      allow update: if signedIn()
+        && request.resource.data.plays == resource.data.plays + 1
+        && request.resource.data.correct - resource.data.correct >= 0
+        && request.resource.data.correct - resource.data.correct <= 1;
+      allow read: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Signalements de questions : création par tout joueur connecté, gestion par l'admin
+    match /reports/{id} {
+      allow create: if signedIn() && request.resource.data.get('text', '').size() <= 1000;
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ── Calendrier partagé (ouvert) ───────────────────────────
+    match /calendar_users/{id}  { allow read, write: if true; }
+    match /calendar_events/{id} { allow read, write: if true; }
+
+    // ── Autres projets de la même base (inchangé) ─────────────
+    match /boutique_produits/{id}        { allow read, write: if true; }
+    match /boutique_ventes/{id}          { allow read, write: if true; }
+    match /boutique_depenses/{id}        { allow read, write: if true; }
+    match /boutique_caisse/{id}          { allow read, write: if true; }
+    match /boutique_marges/{id}          { allow read, write: if true; }
+    match /boutique_notes/{id}           { allow read, write: if true; }
+    match /boutique_reappros/{id}        { allow read, write: if true; }
+    match /boutique_investissements/{id} { allow read, write: if true; }
+    // ── HôtelBar : connexion admin / vendeur (collections hotelbar_*, sans effet sur les autres projets) ──
+    function hbProfile() { return signedIn() && exists(/databases/$(database)/documents/hotelbar_users/$(request.auth.uid)); }
+    function hbAdmin()   { return hbProfile() && get(/databases/$(database)/documents/hotelbar_users/$(request.auth.uid)).data.role == 'admin'; }
+
+    match /hotelbar/{docId} {
+      allow read: if hbProfile();
+      allow write: if hbAdmin() || (hbProfile() && docId in ['products', 'sales']);
+    }
+    match /hotelbar_users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || hbAdmin());
+      allow create: if hbAdmin() || (signedIn() && request.auth.uid == userId
+                       && request.resource.data.role == 'admin'
+                       && !exists(/databases/$(database)/documents/hotelbar_meta/setup));
+      allow update, delete: if hbAdmin();
+    }
+    match /hotelbar_meta/{docId} {
+      allow read: if true;
+      allow create: if signedIn() && docId == 'setup' && !exists(/databases/$(database)/documents/hotelbar_meta/setup);
+    }
+  }
+}

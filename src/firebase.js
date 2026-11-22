@@ -60,7 +60,7 @@ export const resetPassword = (email) => sendPasswordResetEmail(auth, email.trim(
 /** Profil (nom + rôle) d'un utilisateur, ou null s'il n'a pas d'accès */
 export async function getProfile(uid) {
   try {
-    const snap = await getDoc(doc(db, "users", uid));
+    const snap = await getDoc(doc(db, "hotelbar_users", uid));
     return snap.exists() ? snap.data() : null;
   } catch { return null; }
 }
@@ -68,7 +68,7 @@ export async function getProfile(uid) {
 /** true si le compte administrateur a déjà été créé */
 export async function isSetupDone() {
   try {
-    const snap = await getDoc(doc(db, "meta", "setup"));
+    const snap = await getDoc(doc(db, "hotelbar_meta", "setup"));
     return snap.exists();
   } catch { return true; }
 }
@@ -78,10 +78,10 @@ export function setupAdmin(name, email, password) {
   const p = (async () => {
     const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
     const batch = writeBatch(db);
-    batch.set(doc(db, "users", cred.user.uid), {
+    batch.set(doc(db, "hotelbar_users", cred.user.uid), {
       name: name.trim(), email: email.trim(), role: "admin", createdAt: new Date().toISOString(),
     });
-    batch.set(doc(db, "meta", "setup"), { by: cred.user.uid, at: new Date().toISOString() });
+    batch.set(doc(db, "hotelbar_meta", "setup"), { by: cred.user.uid, at: new Date().toISOString() });
     await batch.commit();
   })();
   pending = p;
@@ -97,15 +97,15 @@ export async function createUserAccount({ name, email, password, role }) {
   const sAuth = getAuth(secondary);
   const cred = await createUserWithEmailAndPassword(sAuth, email.trim(), password);
   await signOut(sAuth);
-  await setDoc(doc(db, "users", cred.user.uid), {
+  await setDoc(doc(db, "hotelbar_users", cred.user.uid), {
     name: name.trim(), email: email.trim(), role, createdAt: new Date().toISOString(),
   });
 }
 
 export async function listUsers() {
-  const snap = await getDocs(collection(db, "users"));
+  const snap = await getDocs(collection(db, "hotelbar_users"));
   return snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
 }
 
-export const setUserRole = (uid, data) => setDoc(doc(db, "users", uid), data);
-export const removeUser  = (uid) => deleteDoc(doc(db, "users", uid));
+export const setUserRole = (uid, data) => setDoc(doc(db, "hotelbar_users", uid), data);
+export const removeUser  = (uid) => deleteDoc(doc(db, "hotelbar_users", uid));

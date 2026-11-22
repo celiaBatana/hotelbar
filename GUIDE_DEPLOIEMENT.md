@@ -66,37 +66,7 @@ git push -u origin main
 L'app a maintenant une connexion avec deux rôles : **Admin** (tout) et **Vendeur** (ventes uniquement).
 
 1. Console Firebase → **Authentication** → **Get started** → onglet **Sign-in method** → active **Email/Password**.
-2. Console Firebase → **Firestore Database** → onglet **Rules** → remplace tout par :
-
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    function signedIn()   { return request.auth != null; }
-    function hasProfile() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
-    function isAdmin()    { return hasProfile() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'; }
-
-    // Données du bar : tout le monde connecté lit ; le vendeur n'écrit que ventes + stocks (via vente)
-    match /hotelbar/{docId} {
-      allow read: if hasProfile();
-      allow write: if isAdmin() || (hasProfile() && docId in ['products', 'sales']);
-    }
-    // Utilisateurs : seul l'admin crée / modifie / supprime
-    match /users/{userId} {
-      allow read: if signedIn() && (request.auth.uid == userId || isAdmin());
-      allow create: if isAdmin() || (signedIn() && request.auth.uid == userId
-                       && request.resource.data.role == 'admin'
-                       && !exists(/databases/$(database)/documents/meta/setup));
-      allow update, delete: if isAdmin();
-    }
-    // Marqueur "compte admin déjà créé"
-    match /meta/{docId} {
-      allow read: if true;
-      allow create: if signedIn() && docId == 'setup' && !exists(/databases/$(database)/documents/meta/setup);
-    }
-  }
-}
-```
+2. Console Firebase → **Firestore Database** → onglet **Rules** → **ne remplace pas tout** : la base est partagée avec d'autres projets. Remplace uniquement la ligne `match /hotelbar/{id} { allow read, write: if true; }` par le bloc « HôtelBar » du fichier `firestore.rules` (ou colle tout ce fichier, il contient déjà les autres projets).
 3. Clique **Publish**.
 4. Ouvre le site → **« Première utilisation ? Créer le compte administrateur »** → crée ton compte (fais-le tout de suite, ce lien disparaît une fois le compte admin créé).
 5. Dans le site → **👥 Équipe** → **Ajouter une personne** (rôle Vendeur) et communique-lui email + mot de passe.
