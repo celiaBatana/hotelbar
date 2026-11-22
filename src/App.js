@@ -58,12 +58,18 @@ function Main({ me }) {
   const [newCatName,   setNewCatName]  = useState("");
   const [newCatIcon,   setNewCatIcon]  = useState("🥤");
   const [newCatColor,  setNewCatColor] = useState("#38bdf8");
-  const [newP, setNewP] = useState({ name:"", categoryId:"soft", price:"", stock:"", minStock:"", unit:"bouteille" });
+  const [newP, setNewP] = useState({ name:"", categoryId:"soft", price:"", buyPrice:"", stock:"", minStock:"", unit:"bouteille" });
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
   const quickBusy  = useRef(false);
   const [journal, setJournal] = useState([]);
   const [journalSearch, setJournalSearch] = useState("");
+  const [depenses, setDepenses] = useState([]);
+  const nowMonth = () => { const n=new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`; };
+  const [depMonth, setDepMonth] = useState(nowMonth);
+  const [depForm, setDepForm] = useState({date:new Date().toISOString().slice(0,10),label:"",amount:"",cat:"Autre"});
+  const [restockCost, setRestockCost] = useState("");
+  useEffect(()=>{ setRestockCost(""); },[restockModal]);
 
   const toast$ = (msg, type="ok", undo=null) => {
     setToast({msg,type,undo});
@@ -86,7 +92,7 @@ function Main({ me }) {
     const init = async () => {
       const [cp,cs,cc,cr] = await Promise.all([dbGet("products"),dbGet("sales"),dbGet("categories"),dbGet("reappros")]);
       if (cp) setProducts(cp); if (cs) setSales(cs); if (cc) setCategories(cc); if (cr) setReappros(cr);
-      if (isAdmin) { const cj = await dbGet("journal"); if (cj) setJournal(cj); }
+      if (isAdmin) { const cj = await dbGet("journal"); if (cj) setJournal(cj); const cd = await dbGet("depenses"); if (cd) setDepenses(cd); }
       setLoaded(true);
     };
     init();
@@ -95,7 +101,8 @@ function Main({ me }) {
     const u3=dbListen("categories",v=>setCategories(v));
     const u4=dbListen("reappros", v=>setReappros(v));
     const u5=isAdmin?dbListen("journal",v=>setJournal(v)):()=>{};
-    return ()=>{ u1(); u2(); u3(); u4(); u5(); };
+    const u6=isAdmin?dbListen("depenses",v=>setDepenses(v)):()=>{};
+    return ()=>{ u1(); u2(); u3(); u4(); u5(); u6(); };
   }, []);
 
   const saveP = async (v) => { setProducts(v);   await dbSet("products",v); };
@@ -121,24 +128,67 @@ function Main({ me }) {
   };
 
   // Export CSV (séparateur ; et BOM pour une ouverture directe dans Excel FR)
+  const downloadCsv = (head, rows, filename) => {
+    const esc = (v)=>`"${String(v??"").replace(/"/g,'""')}"`;
+    const csv = "\uFEFF"+[head,...rows].map(r=>r.map(esc).join(";")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+    const a = document.createElement("a");
+    a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    toast$(`✓ ${rows.length} ligne(s) exportée(s)`);
+  };
+  const csvNum = (n)=>String(Math.round(n*100)/100).replace(".",",");
+  const csvDT  = (iso)=>{ const d=new Date(iso); return [d.toLocaleDateString("fr-FR"),d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})]; };
+
   const exportCsv = (monthOnly) => {
     const isV = histTab==="ventes";
     const data = (isV?sales:reappros).filter(x=>!monthOnly||x.date.startsWith(histMonth)).sort((a,b)=>a.date.localeCompare(b.date));
     if (!data.length) { toast$("Rien à exporter","err"); return; }
-    const esc = (v)=>`"${String(v??"").replace(/"/g,'""')}"`;
-    const num = (n)=>String(Math.round(n*100)/100).replace(".",",");
-    const head = isV ? ["Date","Heure","Article","Quantité","Prix unitaire","Montant","Promo","Vendeur"] : ["Date","Heure","Article","Quantité ajoutée","Opérateur"];
+    const head = isV ? ["Date","Heure","Article","Quantité","Prix unitaire","Montant","Promo","Vendeur"] : ["Date","Heure","Article","Quantité ajoutée","Coût total","Opérateur"];
     const rows = data.map(x=>{
-      const d=new Date(x.date);
-      const base=[d.toLocaleDateString("fr-FR"),d.toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}),x.productName,x.qty];
-      return isV ? [...base,num(x.amount/x.qty),num(x.amount),x.promo?"oui":"non",x.by||""] : [...base,x.by||""];
+      const base=[...csvDT(x.date),x.productName,x.qty];
+      return isV ? [...base,csvNum(x.amount/x.qty),csvNum(x.amount),x.promo?"oui":"non",x.by||""] : [...base,x.cost!=null?csvNum(x.cost):"",x.by||""];
     });
-    const csv = "\uFEFF"+[head,...rows].map(r=>r.map(esc).join(";")).join("\r\n");
-    const url = URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
-    const a = document.createElement("a");
-    a.href=url; a.download=`hotelbar_${isV?"ventes":"reappros"}_${monthOnly?histMonth:"tout"}.csv`;
-    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-    toast$(`✓ ${data.length} ligne(s) exportée(s)`);
+    downloadCsv(head,rows,`hotelbar_${isV?"ventes":"reappros"}_${monthOnly?histMonth:"tout"}.csv`);
+  };
+
+  const exportDepCsv = () => {
+    const rows = depRows.map(r=>[...csvDT(r.date),r.type,r.cat,r.label,csvNum(r.amount),r.by||""]);
+    if (!rows.length) { toast$("Rien à exporter","err"); return; }
+    downloadCsv(["Date","Heure","Type","Catégorie","Libellé","Montant","Par"],rows,`hotelbar_depenses_${depMonth}.csv`);
+  };
+
+  const handleEditReapproCost = async (r) => {
+    if (!isAdmin) return;
+    const v = window.prompt(`Coût total payé pour ${r.qty} × ${r.productName} (FCFA) :`, r.cost??"");
+    if (v===null) return;
+    const n = parseFloat(String(v).replace(",","."));
+    if (isNaN(n)||n<0) { toast$("Montant invalide","err"); return; }
+    const lat = await dbGet("reappros")||reappros;
+    const upd = lat.map(x=>x.id===r.id?{...x,cost:n}:x);
+    setReappros(upd); await dbSet("reappros",upd);
+    logAction("Coût réappro modifié",`${r.productName} ×${r.qty} → ${fmtEur(n)}`);
+    toast$("Coût enregistré");
+  };
+
+  const handleAddDep = async () => {
+    if (!isAdmin) return;
+    const amount = parseFloat(String(depForm.amount).replace(",","."));
+    if (!depForm.label.trim()||isNaN(amount)||amount<=0) { toast$("Libellé et montant requis","err"); return; }
+    const lat = await dbGet("depenses")||[];
+    const entry = {id:Date.now(),date:new Date(depForm.date||Date.now()).toISOString(),label:depForm.label.trim(),amount,cat:depForm.cat,by:me.name||me.email};
+    const nd = [...lat,entry];
+    setDepenses(nd); await dbSet("depenses",nd);
+    logAction("Dépense ajoutée",`${entry.label} — ${fmtEur(amount)} (${entry.cat})`);
+    setDepForm(f=>({...f,label:"",amount:""})); toast$("Dépense ajoutée !");
+  };
+
+  const handleDeleteDep = async (d) => {
+    if (!isAdmin||!window.confirm(`Supprimer la dépense « ${d.label} » ?`)) return;
+    const lat = await dbGet("depenses")||depenses;
+    const nd = lat.filter(x=>x.id!==d.id);
+    setDepenses(nd); await dbSet("depenses",nd);
+    logAction("Dépense supprimée",`${d.label} — ${fmtEur(d.amount)}`); toast$("Dépense supprimée","warn");
   };
 
   const undoSale = async (sale) => {
@@ -170,11 +220,11 @@ function Main({ me }) {
   const handleAdd = async () => {
     if (!isAdmin) return;
     if (!newP.name||!newP.price||!newP.stock) { toast$("Champs manquants","err"); return; }
-    const prod={...newP,id:Date.now(),price:+newP.price,stock:+newP.stock,minStock:+newP.minStock||10,sold:0};
+    const prod={...newP,id:Date.now(),price:+newP.price,buyPrice:+newP.buyPrice||0,stock:+newP.stock,minStock:+newP.minStock||10,sold:0};
     const latest=await dbGet("products")||products;
     await saveP([...latest,prod]);
     logAction("Article ajouté",`${prod.name} — ${fmtEur(prod.price)}, stock ${prod.stock}`);
-    setNewP({name:"",categoryId:categories[0]?.id||"soft",price:"",stock:"",minStock:"",unit:"bouteille"});
+    setNewP({name:"",categoryId:categories[0]?.id||"soft",price:"",buyPrice:"",stock:"",minStock:"",unit:"bouteille"});
     setAddModal(false); toast$(`${prod.name} ajouté !`);
   };
 
@@ -183,9 +233,10 @@ function Main({ me }) {
     if (!editModal.name||!editModal.price||editModal.stock==="") { toast$("Champs manquants","err"); return; }
     const latest=await dbGet("products")||products;
     const old=latest.find(p=>p.id===editModal.id)||{};
-    const upd={...old,...editModal,price:+editModal.price,stock:+editModal.stock,minStock:+editModal.minStock,sold:old.sold||0};
+    const upd={...old,...editModal,price:+editModal.price,buyPrice:+editModal.buyPrice||0,stock:+editModal.stock,minStock:+editModal.minStock,sold:old.sold||0};
+    old.buyPrice=old.buyPrice||0;
     await saveP(latest.map(p=>p.id===editModal.id?upd:p));
-    const changes=[["name","nom"],["categoryId","catégorie"],["price","prix"],["stock","stock"],["minStock","seuil"],["unit","unité"]]
+    const changes=[["name","nom"],["categoryId","catégorie"],["price","prix"],["buyPrice","prix d'achat"],["stock","stock"],["minStock","seuil"],["unit","unité"]]
       .filter(([k])=>String(old[k])!==String(upd[k])).map(([k,l])=>`${l} : ${old[k]} → ${upd[k]}`);
     if (changes.length) logAction("Article modifié",`${upd.name} — ${changes.join(", ")}`);
     setEditModal(null); toast$("Article mis à jour !");
@@ -198,10 +249,12 @@ function Main({ me }) {
     await saveP(latest.map(x=>x.id===restockModal.id?{...x,stock:x.stock+ +restockQty}:x));
     // Sauvegarder dans l'historique réappros
     const latestReappros=await dbGet("reappros")||reappros;
-    const nr={id:Date.now(),productId:restockModal.id,productName:restockModal.name,qty:+restockQty,date:new Date().toISOString(),by:me.name||me.email};
+    const autoCost=p?.buyPrice>0?p.buyPrice*+restockQty:null;
+    const cost=restockCost!==""&&!isNaN(+restockCost)?+restockCost:autoCost;
+    const nr={id:Date.now(),productId:restockModal.id,productName:restockModal.name,qty:+restockQty,cost,date:new Date().toISOString(),by:me.name||me.email};
     setReappros([...latestReappros,nr]);
     await dbSet("reappros",[...latestReappros,nr]);
-    logAction("Réapprovisionnement",`${restockModal.name} +${+restockQty}`);
+    logAction("Réapprovisionnement",`${restockModal.name} +${+restockQty}${cost!=null?` — coût ${fmtEur(cost)}`:""}`);
     toast$("Stock réapprovisionné !"); setRestockModal(null); setRestockQty(0);
   };
 
@@ -264,7 +317,7 @@ function Main({ me }) {
         amount:(parseFloat(edits.promo)>0?parseFloat(edits.promo):p.price)*sellQ,
         promo:parseFloat(edits.promo)>0?parseFloat(edits.promo):null,
         date:useDate,by:me.name||me.email});
-      if (restQ>0) newReappros.push({id:Date.now()+p.id+1,productId:p.id,productName:p.name,qty:restQ,date:useDate,by:me.name||me.email});
+      if (restQ>0) newReappros.push({id:Date.now()+p.id+1,productId:p.id,productName:p.name,qty:restQ,cost:parseFloat(edits.cost)>=0&&edits.cost!==""&&edits.cost!=null?parseFloat(edits.cost):(p.buyPrice>0?restQ*p.buyPrice:null),date:useDate,by:me.name||me.email});
       return {...p,stock:p.stock-sellQ+restQ,sold:p.sold+sellQ};
     });
     await Promise.all([saveP(updatedProds),saveS([...latestSales,...newSales]),...(newReappros.length?[dbSet("reappros",[...latestReappros,...newReappros])]:[])]);
@@ -296,6 +349,17 @@ function Main({ me }) {
   // Ventes du mois sélectionné
   const monthSales   = sales.filter(s=>s.date.startsWith(dashMonth));
   const monthCA      = monthSales.reduce((s,x)=>s+x.amount,0);
+  const monthDepManual = depenses.filter(d=>d.date.startsWith(dashMonth)).reduce((s,x)=>s+x.amount,0);
+  const monthRestock   = reappros.filter(r=>r.date.startsWith(dashMonth)).reduce((s,x)=>s+(x.cost||0),0);
+  const monthDepTotal  = monthDepManual+monthRestock;
+  const monthProfit    = monthCA-monthDepTotal;
+  const depRows = [
+    ...depenses.filter(d=>d.date.startsWith(depMonth)).map(d=>({...d,type:"Dépense"})),
+    ...reappros.filter(r=>r.date.startsWith(depMonth)&&r.cost>0).map(r=>({id:"r"+r.id,date:r.date,label:`${r.productName} ×${r.qty}`,amount:r.cost,cat:"Achat stock",by:r.by,type:"Achat stock",auto:true})),
+  ].sort((a,b)=>b.date.localeCompare(a.date));
+  const depTotal      = depRows.reduce((s,x)=>s+x.amount,0);
+  const depStockTotal = depRows.filter(x=>x.auto).reduce((s,x)=>s+x.amount,0);
+  const noCostCount   = reappros.filter(r=>r.date.startsWith(depMonth)&&!(r.cost>0)).length;
   const monthLabel   = (()=>{ const [y,m]=dashMonth.split("-"); return `${MOIS[+m-1]} ${y}`; })();
   // Mois précédent pour comparaison
   const prevMonth    = (()=>{ const [y,m]=dashMonth.split("-"); const d=new Date(+y,+m-2,1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; })();
@@ -334,7 +398,7 @@ function Main({ me }) {
             <div style={{width:38,height:38,borderRadius:12,background:"linear-gradient(135deg,#4f46e5,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>🏨</div>
             <div><div style={{fontWeight:800,fontSize:15,letterSpacing:"-.3px"}}>HôtelBar</div><div style={{fontSize:10,color:"#334155",letterSpacing:1}}>PRO</div></div>
           </div>
-          {[["dashboard","📊","Dashboard"],["stock","📦",isAdmin?"Stocks":"Vendre"],["tableau","📋","Tableau"],["ventes","📜","Historique"],["top","🏆","Classement"],...(isAdmin?[["journal","🗒️","Journal"]]:[])].map(([v,ic,lb])=>(
+          {[["dashboard","📊","Dashboard"],["stock","📦",isAdmin?"Stocks":"Vendre"],["tableau","📋","Tableau"],["ventes","📜","Historique"],["top","🏆","Classement"],...(isAdmin?[["depenses","💸","Dépenses"],["journal","🗒️","Journal"]]:[])].map(([v,ic,lb])=>(
             <button key={v} className={`sb-btn${view===v?" active":""}`} onClick={()=>setView(v)}>
               <span className="sb-ic" style={{fontSize:16}}>{ic}</span>{lb}
               {v==="stock"&&isAdmin&&lowStock.length>0&&<span style={{marginLeft:"auto",background:"#ef4444",color:"#fff",borderRadius:20,padding:"1px 8px",fontSize:11,fontWeight:800}}>{lowStock.length}</span>}
@@ -403,6 +467,25 @@ function Main({ me }) {
                   </div>
                 ))}
               </div>
+
+              {isAdmin&&(
+                <div className="three-col" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:18,marginBottom:26}}>
+                  {[
+                    {label:"Dépenses du mois",val:fmtEur(monthDepTotal),sub:`dont ${fmtEur(monthRestock)} d'achats stock`,color:"#fb923c",icon:"💸"},
+                    {label:"Bénéfice (CA − dépenses)",val:fmtEur(monthProfit),sub:monthProfit>=0?"Positif ✓":"Dépenses supérieures au CA",color:monthProfit>=0?"#4ade80":"#ef4444",icon:"📈"},
+                    {label:"Dépenses ajoutées",val:fmtEur(monthDepManual),sub:`${depenses.filter(d=>d.date.startsWith(dashMonth)).length} ligne(s)`,color:"#f472b6",icon:"🧾"},
+                  ].map((k,i)=>(
+                    <div key={i} className="stat" style={{"--c":k.color,cursor:i===0?"pointer":"default"}} onClick={i===0?()=>{setDepMonth(dashMonth);setView("depenses");}:undefined}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                        <span style={{fontSize:22}}>{k.icon}</span>
+                        <span style={{fontSize:10,color:"#334155",fontWeight:700,letterSpacing:1}}>{k.label.toUpperCase()}</span>
+                      </div>
+                      <div style={{fontSize:25,fontWeight:800,color:k.color,letterSpacing:"-.5px",marginBottom:4}}>{k.val}</div>
+                      <div style={{fontSize:12,color:"#475569"}}>{k.sub}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Mini graphique CA par jour */}
               {monthSales.length>0&&(
@@ -547,7 +630,8 @@ function Main({ me }) {
                           <div style={{fontSize:11,color:"#475569"}}>{p.unit}s</div>
                         </div>
                       </div>
-                      <div style={{fontSize:16,fontWeight:700,color:"#818cf8",marginBottom:14}}>{fmtEur(p.price)} <span style={{fontSize:12,fontWeight:400,color:"#475569"}}>/ {p.unit}</span></div>
+                      <div style={{fontSize:16,fontWeight:700,color:"#818cf8",marginBottom:isAdmin&&p.buyPrice>0?4:14}}>{fmtEur(p.price)} <span style={{fontSize:12,fontWeight:400,color:"#475569"}}>/ {p.unit}</span></div>
+                      {isAdmin&&p.buyPrice>0&&<div style={{fontSize:11,color:"#fb923c",marginBottom:14}}>Achat {fmtEur(p.buyPrice)} · marge {fmtEur(p.price-p.buyPrice)} ({Math.round((1-p.buyPrice/p.price)*100)}%)</div>}
                       <div style={{marginBottom:16}}>
                         <div className="prog-track"><div className="prog-fill" style={{width:`${pp}%`,background:isLow?"linear-gradient(90deg,#ef4444,#dc2626)":pp>50?cat.color:"#38bdf8"}}/></div>
                         <div style={{display:"flex",justifyContent:"space-between",marginTop:5,fontSize:11,color:"#334155"}}>
@@ -559,7 +643,7 @@ function Main({ me }) {
                         <button className="btn" style={{flex:1,background:`linear-gradient(135deg,${cat.color},${cat.color}aa)`,color:"#0f0f17",padding:"11px 0",fontSize:14,fontWeight:800,boxShadow:`0 6px 18px -6px ${cat.color}90`}} onClick={()=>{setSellModal(p);setSellQty(1)}}>💳 Vendre</button>
                         <button className="btn" disabled={p.stock<1} title="Vendre 1 au prix normal (annulable)" style={{background:`${cat.color}22`,color:cat.color,border:`1.5px solid ${cat.color}60`,padding:"11px 16px",fontSize:15,fontWeight:800,opacity:p.stock<1?.4:1}} onClick={()=>handleQuickSell(p)}>+1</button>
                         {isAdmin&&<><button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",padding:"9px 12px",fontSize:13}} title="Réapprovisionner" onClick={()=>{setRestockModal(p);setRestockQty(p.minStock*2)}}>📦</button>
-                        <button className="btn" style={{background:"#1e1e35",color:"#818cf8",border:"1px solid #2d2d45",padding:"9px 12px",fontSize:13}} title="Modifier" onClick={()=>setEditModal({...p,price:p.price.toString(),stock:p.stock.toString(),minStock:p.minStock.toString()})}>✏️</button>
+                        <button className="btn" style={{background:"#1e1e35",color:"#818cf8",border:"1px solid #2d2d45",padding:"9px 12px",fontSize:13}} title="Modifier" onClick={()=>setEditModal({...p,price:p.price.toString(),buyPrice:(p.buyPrice||"").toString(),stock:p.stock.toString(),minStock:p.minStock.toString()})}>✏️</button>
                         <button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"9px 12px",fontSize:13}} title="Supprimer" onClick={()=>handleDelete(p.id)}>🗑</button></>}
                       </div>
                     </div>
@@ -594,10 +678,10 @@ function Main({ me }) {
                 </div>
               </div>
               <div className="card tbl-wrap" style={{overflow:"auto",maxHeight:"calc(100vh - 170px)"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",minWidth:820}}>
+                <table style={{width:"100%",borderCollapse:"collapse",minWidth:960}}>
                   <thead>
                     <tr style={{borderBottom:"2px solid #1e1e35",background:"#0f0f1a"}}>
-                      {["Article","Catégorie","Prix / u","Stock","Min","Ventes","Prix promo",...(isAdmin?["Réappro"]:[]),"Nouveau stock"].map(h=>(
+                      {["Article","Catégorie","Prix / u","Stock","Min","Ventes","Prix promo",...(isAdmin?["Réappro","Coût réappro"]:[]),"Nouveau stock"].map(h=>(
                         <th key={h} style={{padding:"13px 14px",textAlign:"left",fontSize:11,color:h==="Prix promo"?"#f59e0b":"#475569",fontWeight:700,letterSpacing:.6,whiteSpace:"nowrap"}}>{h.toUpperCase()}</th>
                       ))}
                     </tr>
@@ -666,6 +750,11 @@ function Main({ me }) {
                               <button className="sm-btn" onClick={()=>setE("restock",restQ+1)}>+</button>
                               {restQ>0&&<span style={{fontSize:11,color:"#4ade80",fontWeight:700,marginLeft:2}}>+{restQ}</span>}
                             </div>
+                          </td>}
+                          {isAdmin&&<td style={{padding:"8px 14px"}}>
+                            <input className="tbl-in no-arrows" type="number" min="0" value={edits.cost||""} disabled={restQ<=0}
+                              placeholder={restQ>0&&p.buyPrice>0?String(restQ*p.buyPrice):"—"}
+                              style={{width:84,color:"#fb923c",opacity:restQ>0?1:.35}} onChange={ev=>setE("cost",ev.target.value)}/>
                           </td>}
                           {/* Nouveau stock */}
                           <td style={{padding:"11px 14px"}}>
@@ -805,7 +894,7 @@ function Main({ me }) {
                       ]:[
                         {label:"Total réappros",val:`${monthTotal} unités`,  color:"#4ade80"},
                         {label:"Nb opérations", val:monthData.length,        color:"#818cf8"},
-                        {label:"Jours actifs",  val:days.length,             color:"#38bdf8"},
+                        isAdmin?{label:"Coût du mois",val:fmtEur(monthData.reduce((s,x)=>s+(x.cost||0),0)),color:"#fb923c"}:{label:"Jours actifs",val:days.length,color:"#38bdf8"},
                       ]).map((k,i)=>(
                         <div key={i} className="stat" style={{padding:16,"--c":k.color}}>
                           <div style={{fontSize:10,color:"#334155",fontWeight:700,letterSpacing:1,marginBottom:8}}>{k.label.toUpperCase()}</div>
@@ -853,7 +942,7 @@ function Main({ me }) {
                                   <tr style={{borderBottom:"1px solid #1e1e35",background:"#0d0d1a"}}>
                                     {histTab==="ventes"
                                       ?["Heure","Article","Qté","Montant","Opérateur",...(isAdmin?[""]:[])].map(h=><th key={h} style={{padding:"10px 18px",textAlign:"left",fontSize:10,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>)
-                                      :["Heure","Article","Qté ajoutée","Opérateur"].map(h=><th key={h} style={{padding:"10px 18px",textAlign:"left",fontSize:10,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>)
+                                      :["Heure","Article","Qté ajoutée","Opérateur",...(isAdmin?["Coût",""]:[])].map(h=><th key={h} style={{padding:"10px 18px",textAlign:"left",fontSize:10,color:"#334155",fontWeight:700,letterSpacing:.8}}>{h.toUpperCase()}</th>)
                                     }
                                   </tr>
                                 </thead>
@@ -868,6 +957,10 @@ function Main({ me }) {
                                       <td style={{padding:"11px 18px",color:"#38bdf8",fontWeight:600}}>×{s.qty}</td>
                                       {histTab==="ventes"&&<td style={{padding:"11px 18px",color:"#4ade80",fontWeight:700}}>{fmtEur(s.amount)}</td>}
                                       <td style={{padding:"11px 18px"}}><span style={{background:"#1e1e35",borderRadius:6,padding:"2px 8px",fontSize:11,color:"#818cf8",fontWeight:600}}>{s.by||"—"}</span></td>
+                                      {histTab==="reappros"&&isAdmin&&<>
+                                        <td style={{padding:"11px 18px",color:s.cost!=null?"#fb923c":"#334155",fontWeight:700}}>{s.cost!=null?fmtEur(s.cost):"—"}</td>
+                                        <td style={{padding:"8px 18px"}}><button className="btn" style={{background:"#1e1e35",color:"#fb923c",border:"1px solid #2d2d45",padding:"4px 10px",fontSize:11}} onClick={()=>handleEditReapproCost(s)}>✏️ Coût</button></td>
+                                      </>}
                                       {histTab==="ventes"&&isAdmin&&<td style={{padding:"8px 18px"}}>
                                         <button className="btn" style={{background:"#1e1e35",color:"#818cf8",border:"1px solid #2d2d45",padding:"4px 10px",fontSize:11}}
                                           onClick={()=>setEditSaleModal({...s,date:s.date.slice(0,10),price:+(s.amount/s.qty).toFixed(2)})}>✏️ Modifier</button>
@@ -893,6 +986,67 @@ function Main({ me }) {
                   </div>
                 );
               })()}
+            </div>
+          )}
+
+          {/* ══ DÉPENSES ══ */}
+          {view==="depenses"&&isAdmin&&(
+            <div className="fade-up">
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24,flexWrap:"wrap",gap:12}}>
+                <div>
+                  <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Dépenses</h1>
+                  <p style={{color:"#475569",fontSize:14}}>Achats de stock (réappros) + dépenses ajoutées</p>
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                  <button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",width:32,height:32,fontSize:16,padding:0}}
+                    onClick={()=>{ const [y,m]=depMonth.split("-");const d=new Date(+y,+m-2,1);setDepMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); }}>‹</button>
+                  <div style={{background:"#16162a",border:"1px solid #2d2d45",borderRadius:10,padding:"7px 16px",fontWeight:700,fontSize:14,minWidth:140,textAlign:"center"}}>{MOIS[(+depMonth.split("-")[1])-1]} {depMonth.split("-")[0]}</div>
+                  <button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",width:32,height:32,fontSize:16,padding:0}}
+                    onClick={()=>{ const [y,m]=depMonth.split("-");const d=new Date(+y,+m,1);const next=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;if(next<=new Date().toISOString().slice(0,7))setDepMonth(next); }}>›</button>
+                  <button className="btn" style={{background:"#1e1e35",color:"#4ade80",border:"1px solid #2d2d45",padding:"8px 14px",fontSize:12,marginLeft:4}} onClick={exportDepCsv}>⬇ CSV du mois</button>
+                </div>
+              </div>
+
+              <div className="three-col" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14,marginBottom:20}}>
+                {[["Total dépenses",fmtEur(depTotal),"#fb923c"],["Achats de stock",fmtEur(depStockTotal),"#818cf8"],["Autres dépenses",fmtEur(depTotal-depStockTotal),"#f472b6"]].map(([l,v,c])=>(
+                  <div key={l} className="stat" style={{padding:16,"--c":c}}>
+                    <div style={{fontSize:10,color:"#334155",fontWeight:700,letterSpacing:1,marginBottom:8}}>{l.toUpperCase()}</div>
+                    <div style={{fontSize:22,fontWeight:800,color:c}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              {noCostCount>0&&<div style={{background:"rgba(245,158,11,.07)",border:"1px solid rgba(245,158,11,.25)",color:"#fbbf24",borderRadius:12,padding:"10px 14px",fontSize:13,marginBottom:18}}>
+                ⚠️ {noCostCount} réappro(s) de ce mois sans coût : ajoute-le dans Historique → Réappros → ✏️ Coût.
+              </div>}
+
+              <div className="card" style={{padding:20,marginBottom:20}}>
+                <h3 style={{fontWeight:700,fontSize:14,marginBottom:14,color:"#818cf8"}}>+ Ajouter une dépense</h3>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,alignItems:"end"}}>
+                  <div><label className="lbl">DATE</label><input className="input" type="date" value={depForm.date} onChange={e=>setDepForm(f=>({...f,date:e.target.value}))}/></div>
+                  <div style={{gridColumn:"span 2",minWidth:200}}><label className="lbl">LIBELLÉ</label><input className="input" placeholder="Ex: Électricité, salaire Awa, glaçons…" value={depForm.label} onChange={e=>setDepForm(f=>({...f,label:e.target.value}))}/></div>
+                  <div><label className="lbl">MONTANT (FCFA)</label><input className="input no-arrows" type="number" min="0" value={depForm.amount} onChange={e=>setDepForm(f=>({...f,amount:e.target.value}))}/></div>
+                  <div><label className="lbl">CATÉGORIE</label>
+                    <select className="input" value={depForm.cat} onChange={e=>setDepForm(f=>({...f,cat:e.target.value}))}>
+                      {["Autre","Salaires","Électricité / Eau","Entretien / Matériel","Transport","Loyer / Charges"].map(c=><option key={c}>{c}</option>)}
+                    </select></div>
+                  <button className="btn" style={{background:"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"#fff",padding:"12px 0",fontSize:14}} onClick={handleAddDep}>+ Ajouter</button>
+                </div>
+              </div>
+
+              {depRows.length===0
+                ?<div className="card" style={{padding:48,textAlign:"center",color:"#334155"}}>Aucune dépense ce mois</div>
+                :<div className="card" style={{overflow:"hidden"}}>
+                  {depRows.map((r,i)=>(
+                    <div key={r.id} style={{display:"flex",gap:14,alignItems:"center",padding:"13px 18px",borderTop:i?"1px solid #1e1e3540":"none",flexWrap:"wrap"}}>
+                      <div style={{width:70,fontSize:12,color:"#64748b",fontWeight:700}}>{new Date(r.date).toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})}</div>
+                      <span className="pill" style={{background:r.auto?"rgba(129,140,248,.15)":"rgba(244,114,182,.15)",color:r.auto?"#818cf8":"#f472b6",flexShrink:0}}>{r.cat}</span>
+                      <div style={{flex:1,minWidth:160,fontSize:13,fontWeight:600}}>{r.label}</div>
+                      <span style={{fontSize:11,color:"#475569"}}>{r.by}</span>
+                      <div style={{fontWeight:800,color:"#fb923c",minWidth:110,textAlign:"right"}}>{fmtEur(r.amount)}</div>
+                      {r.auto?<span style={{width:34}}/>:<button className="icon-btn" style={{color:"#ef4444"}} title="Supprimer" onClick={()=>handleDeleteDep(r)}>🗑</button>}
+                    </div>
+                  ))}
+                </div>}
             </div>
           )}
 
@@ -971,10 +1125,12 @@ function Main({ me }) {
                 src.forEach(s=>{
                   if (!map[s.productId]) {
                     const prod=products.find(p=>p.id===s.productId);
-                    map[s.productId]={productId:s.productId,name:s.productName,categoryId:prod?.categoryId,qty:0,ca:0};
+                    map[s.productId]={productId:s.productId,name:s.productName,categoryId:prod?.categoryId,qty:0,ca:0,margin:0,mq:0};
                   }
                   map[s.productId].qty+=s.qty;
                   map[s.productId].ca+=s.amount;
+                  const bp=products.find(p=>p.id===s.productId)?.buyPrice;
+                  if (bp>0) { map[s.productId].margin+=s.amount-s.qty*bp; map[s.productId].mq+=s.qty; }
                 });
                 const ranked=Object.values(map).sort((a,b)=>b.ca-a.ca);
 
@@ -1030,6 +1186,7 @@ function Main({ me }) {
                             <div style={{textAlign:"right",flexShrink:0}}>
                               <div style={{fontSize:20,fontWeight:800,color:"#4ade80"}}>{fmtEur(r.ca)}</div>
                               <div style={{fontSize:12,color:"#475569"}}>{fmtEur(r.ca/Math.max(r.qty,1))} / u</div>
+                              {isAdmin&&r.mq>0&&<div style={{fontSize:11,color:"#fb923c"}}>marge ≈ {fmtEur(r.margin)}</div>}
                             </div>
                           </div>
                         );
@@ -1098,7 +1255,7 @@ function Main({ me }) {
           <div className="card m-in" style={{padding:32,width:440,maxWidth:"100%"}} onClick={e=>e.stopPropagation()}>
             <h2 style={{fontWeight:800,fontSize:20,marginBottom:24}}>Nouvel article</h2>
             <div style={{display:"grid",gap:14}}>
-              {[["Nom","text","name","Ex: Perrier…"],["Prix (FCFA)","number","price","500"],["Stock initial","number","stock","24"],["Seuil alerte","number","minStock","6"],["Unité","text","unit","bouteille…"]].map(([l,t,k,ph])=>(
+              {[["Nom","text","name","Ex: Perrier…"],["Prix de vente (FCFA)","number","price","500"],["Prix d'achat (FCFA, optionnel)","number","buyPrice","300"],["Stock initial","number","stock","24"],["Seuil alerte","number","minStock","6"],["Unité","text","unit","bouteille…"]].map(([l,t,k,ph])=>(
                 <div key={k}><label style={{fontSize:11,color:"#475569",display:"block",marginBottom:6,fontWeight:700,letterSpacing:.8}}>{l.toUpperCase()}</label>
                 <input className="input" type={t} placeholder={ph} value={newP[k]} onChange={e=>setNewP(x=>({...x,[k]:e.target.value}))}/></div>
               ))}
@@ -1119,7 +1276,7 @@ function Main({ me }) {
           <div className="card m-in" style={{padding:32,width:440,maxWidth:"100%"}} onClick={e=>e.stopPropagation()}>
             <h2 style={{fontWeight:800,fontSize:20,marginBottom:24}}>Modifier l'article</h2>
             <div style={{display:"grid",gap:14}}>
-              {[["Nom","text","name"],["Prix (FCFA)","number","price"],["Stock actuel","number","stock"],["Seuil alerte","number","minStock"],["Unité","text","unit"]].map(([l,t,k])=>(
+              {[["Nom","text","name"],["Prix de vente (FCFA)","number","price"],["Prix d'achat (FCFA)","number","buyPrice"],["Stock actuel","number","stock"],["Seuil alerte","number","minStock"],["Unité","text","unit"]].map(([l,t,k])=>(
                 <div key={k}><label style={{fontSize:11,color:"#475569",display:"block",marginBottom:6,fontWeight:700,letterSpacing:.8}}>{l.toUpperCase()}</label>
                 <input className="input" type={t} value={editModal[k]} onChange={e=>setEditModal(x=>({...x,[k]:e.target.value}))}/></div>
               ))}
@@ -1145,6 +1302,9 @@ function Main({ me }) {
               </div>
               <label style={{fontSize:11,color:"#475569",display:"block",marginBottom:8,fontWeight:700,letterSpacing:.8}}>QUANTITÉ À AJOUTER</label>
               <input className="input" type="number" min="1" value={restockQty} onChange={e=>setRestockQty(+e.target.value)} style={{textAlign:"center",fontSize:22,fontWeight:800,marginBottom:14}}/>
+              <label style={{fontSize:11,color:"#475569",display:"block",marginBottom:8,fontWeight:700,letterSpacing:.8}}>COÛT TOTAL PAYÉ (FCFA) <span style={{color:"#334155",fontWeight:400}}>— optionnel</span></label>
+              <input className="input no-arrows" type="number" min="0" value={restockCost} onChange={e=>setRestockCost(e.target.value)}
+                placeholder={restockModal.buyPrice>0?`${restockModal.buyPrice*(+restockQty||0)} (qté × prix d'achat)`:"Ex: 15000"} style={{textAlign:"center",fontSize:18,fontWeight:700,marginBottom:14,color:"#fb923c"}}/>
               <div style={{background:"rgba(74,222,128,.07)",border:"1px solid rgba(74,222,128,.2)",borderRadius:12,padding:14,marginBottom:22,textAlign:"center",fontSize:16,fontWeight:700,color:"#4ade80"}}>
                 Nouveau stock : {restockModal.stock + +restockQty}
               </div>
