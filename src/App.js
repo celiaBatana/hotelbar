@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { dbGet, dbSet, dbListen, watchAuth, getProfile, logout, waitPending } from "./firebase";
 import CSS from "./styles";
 import { LoginScreen, UsersModal } from "./Auth";
@@ -60,13 +60,33 @@ function Main({ me }) {
   const [newCatColor,  setNewCatColor] = useState("#38bdf8");
   const [newP, setNewP] = useState({ name:"", categoryId:"soft", price:"", stock:"", minStock:"", unit:"bouteille" });
   const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+  const quickBusy  = useRef(false);
+  const [journal, setJournal] = useState([]);
+  const [journalSearch, setJournalSearch] = useState("");
 
-  const toast$ = (msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null),3000); };
+  const toast$ = (msg, type="ok", undo=null) => {
+    setToast({msg,type,undo});
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(()=>setToast(null), undo?6000:3000);
+  };
+
+  // Journal des modifications (admin uniquement : les vendeurs n'ont pas le droit d'écrire ce document)
+  const logAction = async (action, detail) => {
+    if (!isAdmin) return;
+    try {
+      const j = await dbGet("journal") || [];
+      const entry = {id:`${Date.now()}_${Math.random().toString(36).slice(2,5)}`,date:new Date().toISOString(),by:me.name||me.email,action,detail};
+      const nj = [...j, entry].slice(-500);
+      setJournal(nj); await dbSet("journal", nj);
+    } catch (e) { console.error("journal", e); }
+  };
 
   useEffect(() => {
     const init = async () => {
       const [cp,cs,cc,cr] = await Promise.all([dbGet("products"),dbGet("sales"),dbGet("categories"),dbGet("reappros")]);
       if (cp) setProducts(cp); if (cs) setSales(cs); if (cc) setCategories(cc); if (cr) setReappros(cr);
+      if (isAdmin) { const cj = await dbGet("journal"); if (cj) setJournal(cj); }
       setLoaded(true);
     };
     init();
@@ -74,7 +94,8 @@ function Main({ me }) {
     const u2=dbListen("sales",    v=>setSales(v));
     const u3=dbListen("categories",v=>setCategories(v));
     const u4=dbListen("reappros", v=>setReappros(v));
-    return ()=>{ u1(); u2(); u3(); u4(); };
+    const u5=isAdmin?dbListen("journal",v=>setJournal(v)):()=>{};
+    return ()=>{ u1(); u2(); u3(); u4(); u5(); };
   }, []);
 
   const saveP = async (v) => { setProducts(v);   await dbSet("products",v); };
@@ -99,12 +120,39 @@ function Main({ me }) {
     setSellModal(null); setSellQty(1); setSellDate(""); setSellPromo("");
   };
 
+  const undoSale = async (sale) => {
+    const latest = await dbGet("products")||products;
+    const latS   = await dbGet("sales")||sales;
+    if (!latS.some(x=>x.id===sale.id)) return;
+    await Promise.all([
+      saveP(latest.map(x=>x.id===sale.productId?{...x,stock:x.stock+sale.qty,sold:Math.max(0,x.sold-sale.qty)}:x)),
+      saveS(latS.filter(x=>x.id!==sale.id)),
+    ]);
+    toast$("Vente annulée","warn");
+  };
+
+  const handleQuickSell = async (p0) => {
+    if (quickBusy.current) return;
+    quickBusy.current = true;
+    try {
+      const latest = await dbGet("products")||products;
+      const p = latest.find(x=>x.id===p0.id);
+      if (!p||p.stock<1) { toast$("Stock épuisé !","err"); return; }
+      const latS = await dbGet("sales")||sales;
+      const sale = {id:Date.now(),productId:p.id,productName:p.name,qty:1,amount:p.price,promo:null,date:new Date().toISOString(),by:me.name||me.email};
+      await Promise.all([saveP(latest.map(x=>x.id===p.id?{...x,stock:x.stock-1,sold:x.sold+1}:x)),saveS([...latS,sale])]);
+      const rem = p.stock-1;
+      toast$(rem<=p.minStock?`⚠️ ${p.name} vendu — stock bas (${rem})`:`✓ 1× ${p.name} — ${fmtEur(p.price)}`, rem<=p.minStock?"warn":"ok", ()=>undoSale(sale));
+    } finally { quickBusy.current = false; }
+  };
+
   const handleAdd = async () => {
     if (!isAdmin) return;
     if (!newP.name||!newP.price||!newP.stock) { toast$("Champs manquants","err"); return; }
     const prod={...newP,id:Date.now(),price:+newP.price,stock:+newP.stock,minStock:+newP.minStock||10,sold:0};
     const latest=await dbGet("products")||products;
     await saveP([...latest,prod]);
+    logAction("Article ajouté",`${prod.name} — ${fmtEur(prod.price)}, stock ${prod.stock}`);
     setNewP({name:"",categoryId:categories[0]?.id||"soft",price:"",stock:"",minStock:"",unit:"bouteille"});
     setAddModal(false); toast$(`${prod.name} ajouté !`);
   };
@@ -113,7 +161,12 @@ function Main({ me }) {
     if (!isAdmin) return;
     if (!editModal.name||!editModal.price||editModal.stock==="") { toast$("Champs manquants","err"); return; }
     const latest=await dbGet("products")||products;
-    await saveP(latest.map(p=>p.id===editModal.id?{...editModal,price:+editModal.price,stock:+editModal.stock,minStock:+editModal.minStock}:p));
+    const old=latest.find(p=>p.id===editModal.id)||{};
+    const upd={...old,...editModal,price:+editModal.price,stock:+editModal.stock,minStock:+editModal.minStock,sold:old.sold||0};
+    await saveP(latest.map(p=>p.id===editModal.id?upd:p));
+    const changes=[["name","nom"],["categoryId","catégorie"],["price","prix"],["stock","stock"],["minStock","seuil"],["unit","unité"]]
+      .filter(([k])=>String(old[k])!==String(upd[k])).map(([k,l])=>`${l} : ${old[k]} → ${upd[k]}`);
+    if (changes.length) logAction("Article modifié",`${upd.name} — ${changes.join(", ")}`);
     setEditModal(null); toast$("Article mis à jour !");
   };
 
@@ -127,6 +180,7 @@ function Main({ me }) {
     const nr={id:Date.now(),productId:restockModal.id,productName:restockModal.name,qty:+restockQty,date:new Date().toISOString(),by:me.name||me.email};
     setReappros([...latestReappros,nr]);
     await dbSet("reappros",[...latestReappros,nr]);
+    logAction("Réapprovisionnement",`${restockModal.name} +${+restockQty}`);
     toast$("Stock réapprovisionné !"); setRestockModal(null); setRestockQty(0);
   };
 
@@ -134,7 +188,9 @@ function Main({ me }) {
     if (!isAdmin) return;
     if (!window.confirm("Supprimer cet article ?")) return;
     const latest=await dbGet("products")||products;
+    const gone=latest.find(p=>p.id===id);
     await saveP(latest.filter(p=>p.id!==id)); toast$("Supprimé","warn");
+    logAction("Article supprimé",gone?`${gone.name} (stock ${gone.stock})`:String(id));
   };
 
   const handleAddCat = async () => {
@@ -142,6 +198,7 @@ function Main({ me }) {
     if (!newCatName.trim()) { toast$("Nom requis","err"); return; }
     const id=newCatName.toLowerCase().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"")+"_"+Date.now();
     await saveC([...categories,{id,name:newCatName.trim(),color:newCatColor,icon:newCatIcon}]);
+    logAction("Catégorie créée",newCatName.trim());
     setNewCatName(""); toast$(`Catégorie "${newCatName.trim()}" créée !`);
   };
 
@@ -149,7 +206,9 @@ function Main({ me }) {
     if (!isAdmin) return;
     if (products.some(p=>p.categoryId===id)) { toast$("Des articles utilisent cette catégorie !","err"); return; }
     if (!window.confirm("Supprimer cette catégorie ?")) return;
+    const cname=categories.find(c=>c.id===id)?.name||id;
     await saveC(categories.filter(c=>c.id!==id)); toast$("Catégorie supprimée","warn");
+    logAction("Catégorie supprimée",cname);
   };
 
   const handleEditSale = async () => {
@@ -160,6 +219,8 @@ function Main({ me }) {
       ? {...s, qty:+editSaleModal.qty, amount:+editSaleModal.qty*(editSaleModal.price||s.amount/s.qty), date:editSaleModal.date?new Date(editSaleModal.date).toISOString():s.date}
       : s);
     await saveS(updated);
+    const os=latS.find(x=>x.id===editSaleModal.id);
+    if (os) logAction("Vente modifiée",`${os.productName} — qté ${os.qty} → ${+editSaleModal.qty}, date ${os.date.slice(0,10)} → ${editSaleModal.date||os.date.slice(0,10)}`);
     setEditSaleModal(null); toast$("Vente modifiée !");
   };
 
@@ -186,6 +247,7 @@ function Main({ me }) {
       return {...p,stock:p.stock-sellQ+restQ,sold:p.sold+sellQ};
     });
     await Promise.all([saveP(updatedProds),saveS([...latestSales,...newSales]),...(newReappros.length?[dbSet("reappros",[...latestReappros,...newReappros])]:[])]);
+    if (isAdmin&&(newSales.length||newReappros.length)) logAction("Tableau validé",`${newSales.length} vente(s), ${newReappros.length} réappro(s) — ${tableDate||"aujourd'hui"}`);
     setTableEdits({}); setTableSaving(false);
     toast$(`✓ ${newSales.length} vente(s) et ${newReappros.length} réappro(s) — ${tableDate?new Date(tableDate).toLocaleDateString("fr-FR"):"aujourd'hui"}`);
   };
@@ -242,7 +304,7 @@ function Main({ me }) {
     <div style={{background:"#0f0f17",minHeight:"100vh",fontFamily:"'Plus Jakarta Sans',sans-serif",color:"#e2e8f0"}}>
       <style>{CSS}</style>
 
-      {toast&&<div className="toast" style={{background:toast.type==="err"?"#ef4444":toast.type==="warn"?"#f59e0b":"#22c55e",color:"#fff"}}><span>{toast.type==="err"?"✕":toast.type==="warn"?"⚠":"✓"}</span>{toast.msg}</div>}
+      {toast&&<div className="toast" style={{background:toast.type==="err"?"#ef4444":toast.type==="warn"?"#f59e0b":"#22c55e",color:"#fff"}}><span>{toast.type==="err"?"✕":toast.type==="warn"?"⚠":"✓"}</span>{toast.msg}{toast.undo&&<button className="btn" onClick={()=>{toast.undo();setToast(null);}} style={{marginLeft:8,background:"rgba(0,0,0,.28)",color:"#fff",padding:"5px 12px",fontSize:12}}>↶ Annuler</button>}</div>}
 
       <div className="app-shell" style={{display:"flex",minHeight:"100vh"}}>
         {/* ── Sidebar ── */}
@@ -251,7 +313,7 @@ function Main({ me }) {
             <div style={{width:38,height:38,borderRadius:12,background:"linear-gradient(135deg,#4f46e5,#7c3aed)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>🏨</div>
             <div><div style={{fontWeight:800,fontSize:15,letterSpacing:"-.3px"}}>HôtelBar</div><div style={{fontSize:10,color:"#334155",letterSpacing:1}}>PRO</div></div>
           </div>
-          {[["dashboard","📊","Dashboard"],["stock","📦",isAdmin?"Stocks":"Vendre"],["tableau","📋","Tableau"],["ventes","📜","Historique"],["top","🏆","Classement"]].map(([v,ic,lb])=>(
+          {[["dashboard","📊","Dashboard"],["stock","📦",isAdmin?"Stocks":"Vendre"],["tableau","📋","Tableau"],["ventes","📜","Historique"],["top","🏆","Classement"],...(isAdmin?[["journal","🗒️","Journal"]]:[])].map(([v,ic,lb])=>(
             <button key={v} className={`sb-btn${view===v?" active":""}`} onClick={()=>setView(v)}>
               <span className="sb-ic" style={{fontSize:16}}>{ic}</span>{lb}
               {v==="stock"&&isAdmin&&lowStock.length>0&&<span style={{marginLeft:"auto",background:"#ef4444",color:"#fff",borderRadius:20,padding:"1px 8px",fontSize:11,fontWeight:800}}>{lowStock.length}</span>}
@@ -474,6 +536,7 @@ function Main({ me }) {
                       </div>
                       <div style={{display:"flex",gap:6}}>
                         <button className="btn" style={{flex:1,background:`linear-gradient(135deg,${cat.color},${cat.color}aa)`,color:"#0f0f17",padding:"11px 0",fontSize:14,fontWeight:800,boxShadow:`0 6px 18px -6px ${cat.color}90`}} onClick={()=>{setSellModal(p);setSellQty(1)}}>💳 Vendre</button>
+                        <button className="btn" disabled={p.stock<1} title="Vendre 1 au prix normal (annulable)" style={{background:`${cat.color}22`,color:cat.color,border:`1.5px solid ${cat.color}60`,padding:"11px 16px",fontSize:15,fontWeight:800,opacity:p.stock<1?.4:1}} onClick={()=>handleQuickSell(p)}>+1</button>
                         {isAdmin&&<><button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",padding:"9px 12px",fontSize:13}} title="Réapprovisionner" onClick={()=>{setRestockModal(p);setRestockQty(p.minStock*2)}}>📦</button>
                         <button className="btn" style={{background:"#1e1e35",color:"#818cf8",border:"1px solid #2d2d45",padding:"9px 12px",fontSize:13}} title="Modifier" onClick={()=>setEditModal({...p,price:p.price.toString(),stock:p.stock.toString(),minStock:p.minStock.toString()})}>✏️</button>
                         <button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"9px 12px",fontSize:13}} title="Supprimer" onClick={()=>handleDelete(p.id)}>🗑</button></>}
@@ -647,9 +710,16 @@ function Main({ me }) {
                   {isAdmin&&(histTab==="ventes"?sales:reappros).length>0&&(
                     <button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"8px 14px",fontSize:12,marginLeft:4}}
                       onClick={async()=>{
-                        if (!window.confirm(`Effacer tout l'historique des ${histTab==="ventes"?"ventes":"réappros"} ?`)) return;
-                        if (histTab==="ventes") await saveS([]);
-                        else { setReappros([]); await dbSet("reappros",[]); }
+                        const what=histTab==="ventes"?"ventes":"réappros";
+                        const typed=window.prompt(`⚠️ Action définitive : tout l'historique des ${what} (tous les mois) sera effacé.\n\nTape SUPPRIMER pour confirmer :`);
+                        if (typed===null||typed.trim().toUpperCase()!=="SUPPRIMER") { if (typed!==null) toast$("Annulé — rien n'a été effacé","warn"); return; }
+                        if (histTab==="ventes") {
+                          await saveS([]);
+                          const lp=await dbGet("products")||products;
+                          await saveP(lp.map(x=>({...x,sold:0})));
+                        } else { setReappros([]); await dbSet("reappros",[]); }
+                        logAction("Historique effacé",`Tout l'historique des ${what}`);
+                        toast$("Historique effacé","warn");
                       }}>🗑 Tout effacer</button>
                   )}
                 </div>
@@ -801,6 +871,40 @@ function Main({ me }) {
             </div>
           )}
 
+          {/* ══ JOURNAL ══ */}
+          {view==="journal"&&isAdmin&&(
+            <div className="fade-up">
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24,flexWrap:"wrap",gap:12}}>
+                <div>
+                  <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Journal</h1>
+                  <p style={{color:"#475569",fontSize:14}}>Qui a modifié quoi · {journal.length} action(s) (500 dernières conservées)</p>
+                </div>
+                <input className="input" placeholder="🔍 Rechercher (nom, article, action…)" value={journalSearch} onChange={e=>setJournalSearch(e.target.value)} style={{width:280,maxWidth:"100%"}}/>
+              </div>
+              {(()=>{
+                const q=journalSearch.trim().toLowerCase();
+                const rows=[...journal].reverse().filter(e=>!q||`${e.by} ${e.action} ${e.detail}`.toLowerCase().includes(q));
+                if (rows.length===0) return <div className="card" style={{padding:48,textAlign:"center",color:"#334155"}}>{journal.length?"Aucun résultat":"Aucune modification enregistrée pour l'instant"}</div>;
+                const col=(a)=>/supprim|effac/i.test(a)?["rgba(239,68,68,.15)","#ef4444"]:/ajout|créé|Réappro/i.test(a)?["rgba(74,222,128,.13)","#4ade80"]:["rgba(129,140,248,.15)","#818cf8"];
+                return (
+                  <div className="card" style={{overflow:"hidden"}}>
+                    {rows.map((e,i)=>{const [bg,fg]=col(e.action);return(
+                      <div key={e.id} style={{display:"flex",gap:14,alignItems:"flex-start",padding:"13px 18px",borderTop:i?"1px solid #1e1e3540":"none",flexWrap:"wrap"}}>
+                        <div style={{width:112,flexShrink:0,fontSize:12,color:"#475569"}}>
+                          <div style={{fontWeight:700,color:"#64748b"}}>{new Date(e.date).toLocaleDateString("fr-FR",{day:"2-digit",month:"short"})}</div>
+                          <div>{new Date(e.date).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"})}</div>
+                        </div>
+                        <span className="pill" style={{background:bg,color:fg,flexShrink:0}}>{e.action}</span>
+                        <div style={{flex:1,minWidth:200,fontSize:13}}>{e.detail}</div>
+                        <span style={{background:"#1e1e35",borderRadius:6,padding:"2px 8px",fontSize:11,color:"#818cf8",fontWeight:600}}>{e.by}</span>
+                      </div>
+                    );})}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
           {/* ══ CLASSEMENT ══ */}
           {view==="top"&&(
             <div className="fade-up">
@@ -837,27 +941,17 @@ function Main({ me }) {
 
               {(()=>{
                 // Calcul du classement selon le mode
-                let ranked=[];
-                if (topMode==="global") {
-                  // Basé sur le compteur sold des produits
-                  ranked=[...products].sort((a,b)=>b.sold-a.sold).map(p=>({
-                    productId:p.id, name:p.name, categoryId:p.categoryId,
-                    qty:p.sold, ca:p.sold*p.price
-                  }));
-                } else {
-                  // Basé sur les ventes du mois sélectionné
-                  const monthSalesTop=sales.filter(s=>s.date.startsWith(topMonth));
-                  const map={};
-                  monthSalesTop.forEach(s=>{
-                    if (!map[s.productId]) {
-                      const prod=products.find(p=>p.id===s.productId);
-                      map[s.productId]={productId:s.productId,name:s.productName,categoryId:prod?.categoryId,qty:0,ca:0};
-                    }
-                    map[s.productId].qty+=s.qty;
-                    map[s.productId].ca+=s.amount;
-                  });
-                  ranked=Object.values(map).sort((a,b)=>b.ca-a.ca);
-                }
+                const src = topMode==="global" ? sales : sales.filter(s=>s.date.startsWith(topMonth));
+                const map={};
+                src.forEach(s=>{
+                  if (!map[s.productId]) {
+                    const prod=products.find(p=>p.id===s.productId);
+                    map[s.productId]={productId:s.productId,name:s.productName,categoryId:prod?.categoryId,qty:0,ca:0};
+                  }
+                  map[s.productId].qty+=s.qty;
+                  map[s.productId].ca+=s.amount;
+                });
+                const ranked=Object.values(map).sort((a,b)=>b.ca-a.ca);
 
                 const maxCA=Math.max(...ranked.map(r=>r.ca),1);
                 const totalMonthCA=ranked.reduce((s,r)=>s+r.ca,0);
