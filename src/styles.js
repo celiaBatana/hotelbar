@@ -46,5 +46,28 @@ const CSS = `
   .toast{left:12px;right:12px;bottom:84px;max-width:none}
   .card.modal-card{padding:22px!important}
 }
+
+/* ── Raffinements visuels ── */
+body{font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+.main-area>div{max-width:1280px;margin-left:auto;margin-right:auto}
+.card{box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 14px 34px -22px rgba(0,0,0,.8);background:linear-gradient(180deg,#181830,#15152a)}
+.stat{position:relative;overflow:hidden;background:linear-gradient(180deg,#181830,#14142a)}
+.stat::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:var(--c,#312e81)}
+.stat::after{content:"";position:absolute;right:-40px;top:-40px;width:120px;height:120px;border-radius:50%;background:var(--c,#312e81);opacity:.08;filter:blur(6px);pointer-events:none}
+.stat:hover{transform:translateY(-2px);transition:all .2s}
+.prod-card{background:linear-gradient(180deg,#181830,#14142a)}
+.prod-card::before{content:"";position:absolute;left:0;top:18px;bottom:18px;width:3px;border-radius:0 3px 3px 0;background:var(--c,#312e81)}
+.sb-btn{position:relative}
+.sb-btn.active::before{content:"";position:absolute;left:-12px;top:10px;bottom:10px;width:3px;border-radius:0 3px 3px 0;background:#a5b4fc}
+.sb-btn.only-m,.sb-btn.active{white-space:nowrap}
+.tbl-wrap thead tr{position:sticky;top:0;z-index:2;background:#0f0f1a}
+.tbl-wrap tbody tr{transition:background .15s}.tbl-wrap tbody tr:hover{background:rgba(129,140,248,.06)!important}
+button:focus-visible,.input:focus-visible,.tbl-in:focus-visible{outline:2px solid #818cf8;outline-offset:2px}
+.input::placeholder,.tbl-in::placeholder{color:#3b4258}
+.tab:hover{filter:brightness(1.2)}
+.modal-bg{background:rgba(5,5,12,.72)}
+.modal-bg>.card{box-shadow:0 30px 80px -20px rgba(0,0,0,.9),0 0 0 1px rgba(129,140,248,.12)}
+.main-area h1{background:linear-gradient(90deg,#fff,#a5b4fc);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+@media(max-width:860px){.sb-btn.active::before{left:50%;right:auto;top:auto;bottom:-6px;height:3px;width:20px;transform:translateX(-50%)}}
 `;
 export default CSS;

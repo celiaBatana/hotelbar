@@ -285,7 +285,7 @@ function Main({ me }) {
               {/* Header + sélecteur de mois */}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24,flexWrap:"wrap",gap:12}}>
                 <div>
-                  <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Dashboard</h1>
+                  <h1 style={{fontSize:26,fontWeight:800,letterSpacing:"-.5px",marginBottom:4}}>Bonjour {(me.name||"").split(" ")[0]||""} 👋</h1>
                   <p style={{color:"#475569",fontSize:14}}>{new Date().toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}</p>
                 </div>
                 {/* Sélecteur mois */}
@@ -310,7 +310,7 @@ function Main({ me }) {
                   {label:"Valeur stock", val:fmtEur(stockVal),    sub:`${products.length} références`,                                                                           color:"#38bdf8", icon:"📦"},
                   {label:"Alertes",      val:lowStock.length,     sub:lowStock.length?"articles critiques":"Tout OK ✓",                                                          color:lowStock.length?"#ef4444":"#4ade80", icon:"⚠️"},
                 ].map((k,i)=>(
-                  <div key={i} className="stat">
+                  <div key={i} className="stat" style={{"--c":k.color}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
                       <span style={{fontSize:22}}>{k.icon}</span>
                       <span style={{fontSize:10,color:"#334155",fontWeight:700,letterSpacing:1}}>{k.label.toUpperCase()}</span>
@@ -449,7 +449,7 @@ function Main({ me }) {
                 {filtered.map(p=>{
                   const cat=getCat(p.categoryId);const isLow=p.stock<=p.minStock;const pp=pct(p);
                   return(
-                    <div key={p.id} className="prod-card" style={{borderColor:isLow?"rgba(239,68,68,.8)":"#1e1e35",boxShadow:isLow?"0 0 20px rgba(239,68,68,.2)":""}}>
+                    <div key={p.id} className="prod-card" style={{"--c":cat.color,borderColor:isLow?"rgba(239,68,68,.8)":"#1e1e35",boxShadow:isLow?"0 0 20px rgba(239,68,68,.2)":""}}>
                       {isLow&&<div style={{position:"absolute",top:0,left:0,right:0,height:3,background:"linear-gradient(90deg,#ef4444,#dc2626)"}}/>}
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
                         <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -473,7 +473,7 @@ function Main({ me }) {
                         </div>
                       </div>
                       <div style={{display:"flex",gap:6}}>
-                        <button className="btn" style={{flex:1,background:`${cat.color}18`,color:cat.color,border:`1px solid ${cat.color}30`,padding:"9px 0",fontSize:13}} onClick={()=>{setSellModal(p);setSellQty(1)}}>💳 Vendre</button>
+                        <button className="btn" style={{flex:1,background:`linear-gradient(135deg,${cat.color},${cat.color}aa)`,color:"#0f0f17",padding:"11px 0",fontSize:14,fontWeight:800,boxShadow:`0 6px 18px -6px ${cat.color}90`}} onClick={()=>{setSellModal(p);setSellQty(1)}}>💳 Vendre</button>
                         {isAdmin&&<><button className="btn" style={{background:"#1e1e35",color:"#94a3b8",border:"1px solid #2d2d45",padding:"9px 12px",fontSize:13}} title="Réapprovisionner" onClick={()=>{setRestockModal(p);setRestockQty(p.minStock*2)}}>📦</button>
                         <button className="btn" style={{background:"#1e1e35",color:"#818cf8",border:"1px solid #2d2d45",padding:"9px 12px",fontSize:13}} title="Modifier" onClick={()=>setEditModal({...p,price:p.price.toString(),stock:p.stock.toString(),minStock:p.minStock.toString()})}>✏️</button>
                         <button className="btn" style={{background:"rgba(239,68,68,.08)",color:"#ef4444",border:"1px solid rgba(239,68,68,.2)",padding:"9px 12px",fontSize:13}} title="Supprimer" onClick={()=>handleDelete(p.id)}>🗑</button></>}
@@ -509,7 +509,7 @@ function Main({ me }) {
                   </button>
                 </div>
               </div>
-              <div className="card" style={{overflow:"auto"}}>
+              <div className="card tbl-wrap" style={{overflow:"auto",maxHeight:"calc(100vh - 170px)"}}>
                 <table style={{width:"100%",borderCollapse:"collapse",minWidth:820}}>
                   <thead>
                     <tr style={{borderBottom:"2px solid #1e1e35",background:"#0f0f1a"}}>
@@ -712,7 +712,7 @@ function Main({ me }) {
                         {label:"Nb opérations", val:monthData.length,        color:"#818cf8"},
                         {label:"Jours actifs",  val:days.length,             color:"#38bdf8"},
                       ]).map((k,i)=>(
-                        <div key={i} className="stat" style={{padding:16}}>
+                        <div key={i} className="stat" style={{padding:16,"--c":k.color}}>
                           <div style={{fontSize:10,color:"#334155",fontWeight:700,letterSpacing:1,marginBottom:8}}>{k.label.toUpperCase()}</div>
                           <div style={{fontSize:22,fontWeight:800,color:k.color}}>{k.val}</div>
                         </div>
@@ -874,11 +874,11 @@ function Main({ me }) {
                   <div>
                     {/* Récap */}
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:20}}>
-                      <div className="stat" style={{padding:16}}>
+                      <div className="stat" style={{padding:16,"--c":"#4ade80"}}>
                         <div style={{fontSize:10,color:"#334155",fontWeight:700,letterSpacing:1,marginBottom:8}}>CA {topMode==="mois"?"DU MOIS":"TOTAL"}</div>
                         <div style={{fontSize:22,fontWeight:800,color:"#4ade80"}}>{fmtEur(totalMonthCA)}</div>
                       </div>
-                      <div className="stat" style={{padding:16}}>
+                      <div className="stat" style={{padding:16,"--c":"#818cf8"}}>
                         <div style={{fontSize:10,color:"#334155",fontWeight:700,letterSpacing:1,marginBottom:8}}>ARTICLES VENDUS</div>
                         <div style={{fontSize:22,fontWeight:800,color:"#818cf8"}}>{totalMonthQty}</div>
                       </div>
